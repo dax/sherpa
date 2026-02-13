@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Sherpa — Analyze Repository{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-center min-h-screen">
+    <div class="card bg-base-100 shadow-xl max-w-lg w-full">
+        <div class="card-body">
+            <h1 class="card-title text-2xl font-bold justify-center">Analyze Repository</h1>
+            <p class="text-base-content/70 text-center mb-4">Enter the path to your local Git repository to analyze branch changes.</p>
+
+            <div id="repo-feedback"></div>
+
+            <form hx-post="/repo/analyze"
+                  hx-target="#repo-feedback"
+                  hx-swap="innerHTML"
+                  hx-indicator="#loading-spinner">
+
+                <div class="form-control w-full">
+                    <label class="label" for="repo-path">
+                        <span class="label-text">Repository Path</span>
+                    </label>
+                    <input type="text"
+                           name="path"
+                           id="repo-path"
+                           placeholder="/path/to/your/repo"
+                           class="input input-bordered w-full font-mono"
+                           required />
+                </div>
+
+                <div class="card-actions mt-6 justify-center">
+                    <button type="submit" class="btn btn-primary w-full">
+                        Analyze Repository
+                    </button>
+                </div>
+            </form>
+
+            <div class="flex justify-center mt-2">
+                <span id="loading-spinner" class="loading loading-spinner loading-lg htmx-indicator"></span>
+            </div>
+
+            <div class="text-center mt-4">
+                <a href="/" class="link link-primary text-sm">Back to Home</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
