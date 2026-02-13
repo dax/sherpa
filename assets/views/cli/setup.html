@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Sherpa — Select AI Backend{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-center min-h-screen">
+    <div class="card bg-base-100 shadow-xl max-w-lg w-full">
+        <div class="card-body">
+            <h1 class="card-title text-2xl font-bold justify-center">Select AI Backend</h1>
+            <p class="text-base-content/70 text-center mb-4">Choose which CLI tool Sherpa should use for AI-powered reviews.</p>
+
+            {% if none_available %}
+            <div class="alert alert-error" role="alert">
+                <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                </svg>
+                <div>
+                    <p class="font-semibold">No AI CLI tools detected</p>
+                    <p class="text-sm mt-1">Install one of the following to use Sherpa:</p>
+                    <ul class="text-sm mt-2 list-disc list-inside">
+                        <li><a href="https://opencode.ai" class="link link-primary" target="_blank" rel="noopener">OpenCode CLI</a></li>
+                        <li><a href="https://claude.ai/code" class="link link-primary" target="_blank" rel="noopener">Claude Code CLI</a></li>
+                    </ul>
+                </div>
+            </div>
+            {% else %}
+
+            <div id="cli-feedback"></div>
+
+            <form hx-post="/cli/select"
+                  hx-target="#cli-feedback"
+                  hx-swap="innerHTML">
+
+                <div class="space-y-3">
+                    {% for tool in tools %}
+                    <label class="card card-border cursor-pointer hover:border-primary transition-colors {% if not tool.available %}opacity-50 grayscale pointer-events-none{% endif %}"
+                           for="cli-{{ tool.cli }}">
+                        <div class="card-body p-4">
+                            <div class="flex items-center gap-3">
+                                <input type="radio"
+                                       name="cli_tool"
+                                       value="{{ tool.cli }}"
+                                       class="radio radio-primary"
+                                       id="cli-{{ tool.cli }}"
+                                       {% if not tool.available %}disabled{% endif %}
+                                       {% if pre_selected and pre_selected == tool.cli %}checked{% endif %} />
+                                <div class="flex-1">
+                                    <div class="flex items-center gap-2">
+                                        <span class="font-semibold">
+                                            {% if tool.cli == "opencode" %}OpenCode{% elif tool.cli == "claude" %}Claude Code{% endif %}
+                                        </span>
+                                        {% if tool.available %}
+                                        <span class="badge badge-success badge-sm">Available</span>
+                                        {% else %}
+                                        <span class="badge badge-error badge-sm">Not Found</span>
+                                        {% endif %}
+                                    </div>
+                                    {% if tool.path %}
+                                    <p class="text-xs text-base-content/50 mt-1 font-mono">{{ tool.path }}</p>
+                                    {% else %}
+                                    <p class="text-xs text-base-content/50 mt-1">Not found in PATH</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </label>
+                    {% endfor %}
+                </div>
+
+                <div class="card-actions mt-6 justify-center">
+                    <button type="submit" class="btn btn-primary w-full">
+                        Continue
+                    </button>
+                </div>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

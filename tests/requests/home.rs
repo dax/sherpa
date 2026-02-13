@@ -27,7 +27,10 @@ async fn can_get_index_page() {
         assert!(body.contains("htmx.org"), "page should include HTMX script");
         assert!(body.contains("flyonui"), "page should include FlyonUI assets");
         assert!(body.contains("diff2html"), "page should include diff2html assets");
-        assert!(body.contains("hx-get"), "page should have an HTMX-powered element");
+        assert!(
+            body.contains("/cli/setup") || body.contains("AI Backend"),
+            "page should show CLI setup link or backend status"
+        );
     })
     .await;
 }

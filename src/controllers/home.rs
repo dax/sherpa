@@ -1,8 +1,22 @@
 use loco_rs::prelude::*;
 
+use crate::services::config::SherpaConfig;
+
 #[debug_handler]
 async fn index(ViewEngine(v): ViewEngine<TeraView>) -> Result<Response> {
-    format::render().view(&v, "home/index.html", data!({"app_name": "Sherpa"}))
+    let selected_cli = SherpaConfig::default_path()
+        .ok()
+        .and_then(|p| SherpaConfig::load(&p).ok())
+        .and_then(|c| c.ai.selected_cli);
+
+    format::render().view(
+        &v,
+        "home/index.html",
+        data!({
+            "app_name": "Sherpa",
+            "selected_cli": selected_cli,
+        }),
+    )
 }
 
 #[debug_handler]

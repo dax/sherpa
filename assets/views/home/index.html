@@ -11,19 +11,33 @@
 
             <div class="divider"></div>
 
-            <div id="greeting" class="min-h-[3rem] flex items-center">
-                <p class="text-base-content/50">Click the button to test HTMX</p>
+            {% if selected_cli %}
+            <div class="flex items-center gap-2 mb-2">
+                <span class="badge badge-success">AI Backend</span>
+                <span class="font-semibold">
+                    {% if selected_cli == "opencode" %}OpenCode{% elif selected_cli == "claude" %}Claude Code{% endif %}
+                </span>
             </div>
+            <a href="/cli/setup" class="link link-primary text-sm">Change AI backend</a>
+            {% else %}
+            <div class="alert alert-warning mt-2" role="alert">
+                <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+                </svg>
+                <span>No AI backend selected yet.</span>
+            </div>
+            {% endif %}
 
-            <div class="card-actions mt-4">
-                <button
-                    class="btn btn-primary"
-                    hx-get="/greeting"
-                    hx-target="#greeting"
-                    hx-swap="innerHTML"
-                >
-                    Load Greeting
+            <div class="card-actions mt-4 w-full">
+                {% if selected_cli %}
+                <button class="btn btn-primary w-full" disabled>
+                    Start Review (coming soon)
                 </button>
+                {% else %}
+                <a href="/cli/setup" class="btn btn-primary w-full">
+                    Set Up AI Backend
+                </a>
+                {% endif %}
             </div>
         </div>
     </div>
