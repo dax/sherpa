@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Sherpa — AI-Guided Code Review{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-center min-h-screen">
+    <div class="card bg-base-100 shadow-xl max-w-lg w-full">
+        <div class="card-body items-center text-center">
+            <h1 class="card-title text-3xl font-bold">{{ app_name }}</h1>
+            <p class="text-base-content/70">AI-Guided Code Review Tool</p>
+
+            <div class="divider"></div>
+
+            <div id="greeting" class="min-h-[3rem] flex items-center">
+                <p class="text-base-content/50">Click the button to test HTMX</p>
+            </div>
+
+            <div class="card-actions mt-4">
+                <button
+                    class="btn btn-primary"
+                    hx-get="/greeting"
+                    hx-target="#greeting"
+                    hx-swap="innerHTML"
+                >
+                    Load Greeting
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

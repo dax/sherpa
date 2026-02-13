@@ -13,3 +13,36 @@ async fn can_get_home() {
     })
     .await;
 }
+
+#[tokio::test]
+#[serial]
+async fn can_get_index_page() {
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request.get("/").await;
+
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(body.contains("Sherpa"), "page should contain app name");
+        assert!(body.contains("htmx.org"), "page should include HTMX script");
+        assert!(body.contains("flyonui"), "page should include FlyonUI assets");
+        assert!(body.contains("diff2html"), "page should include diff2html assets");
+        assert!(body.contains("hx-get"), "page should have an HTMX-powered element");
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn can_get_greeting_fragment() {
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request.get("/greeting").await;
+
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(body.contains("Hello from HTMX"), "fragment should contain greeting text");
+        assert!(!body.contains("<!DOCTYPE"), "fragment should NOT be a full HTML document");
+    })
+    .await;
+}
