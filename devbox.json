@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/main/.schema/devbox.schema.json",
+  "packages": [
+    "rustup@latest",
+    "nodejs@latest",
+    "cargo-watch@latest",
+    "libiconv@latest",
+    "just@latest",
+    "prek@latest"
+  ],
+  "env": {
+    "RUST_BACKTRACE": "1",
+    "CARGO_TERM_COLOR": "always"
+  },
+  "shell": {
+    "init_hook": [
+      "rustup default stable",
+      "npm install"
+    ]
+  }
+}

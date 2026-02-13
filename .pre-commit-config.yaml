@@ -1,0 +1,36 @@
+repos:
+  - repo: local
+    hooks:
+      - id: rustfmt
+        name: rustfmt
+        entry: cargo fmt --all -- --color=always
+        language: system
+        files: \.rs$
+        pass_filenames: false
+
+      - id: clippy
+        name: clippy
+        entry: cargo clippy -- -D warnings
+        language: system
+        files: \.rs$
+        pass_filenames: false
+
+      - id: beads-pre-commit
+        name: beads pre-commit
+        entry: bd hook pre-commit
+        language: system
+        pass_filenames: false
+
+      - id: beads-pre-push
+        name: beads pre-push
+        entry: bd hooks run pre-push
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: beads-prepare-commit-msg
+        name: beads prepare-commit-msg
+        entry: bd hooks run prepare-commit-msg
+        language: system
+        pass_filenames: false
+        stages: [prepare-commit-msg]
