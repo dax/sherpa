@@ -2,7 +2,9 @@ use loco_rs::testing::prelude::*;
 use serial_test::serial;
 use sherpa::app::App;
 use sherpa::services::git_analysis::{ChangedFile, FileStatus, GitAnalysis};
-use sherpa::services::review_session::ReviewSession;
+use sherpa::services::review_session::{
+    FileRef, ReviewPlan, ReviewSession, ReviewStep,
+};
 
 fn create_test_session() -> ReviewSession {
     let analysis = GitAnalysis {
@@ -125,6 +127,169 @@ async fn can_skip_section() {
         assert!(
             body.contains("retry"),
             "should have retry option"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+fn create_session_with_plan() -> ReviewSession {
+    let mut session = create_test_session();
+    session.review_plan = Some(ReviewPlan {
+        steps: vec![
+            ReviewStep {
+                title: "Core data models".to_string(),
+                rationale: "Foundation types used everywhere".to_string(),
+                file_refs: vec![FileRef {
+                    path: "src/lib.rs".to_string(),
+                    diff_lines: None,
+                }],
+            },
+            ReviewStep {
+                title: "New feature code".to_string(),
+                rationale: "The main feature implementation".to_string(),
+                file_refs: vec![FileRef {
+                    path: "src/new.rs".to_string(),
+                    diff_lines: Some((1, 10)),
+                }],
+            },
+        ],
+        generated_at: "12:00:00".to_string(),
+    });
+    session.save().expect("save session with plan");
+    session
+}
+
+#[tokio::test]
+#[serial]
+async fn can_get_guide_page_with_plan() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(body.contains("Review Plan"), "should show review plan heading");
+        assert!(body.contains("Core data models"), "should show step 1 title");
+        assert!(body.contains("New feature code"), "should show step 2 title");
+        assert!(body.contains("2 steps"), "should show total step count");
+        assert!(
+            body.contains("lib.rs"),
+            "should show file reference"
+        );
+        assert!(
+            body.contains("Foundation types"),
+            "should show step rationale"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn guide_page_redirects_without_plan() {
+    let session = create_test_session();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide"))
+            .await;
+
+        let status = res.status_code();
+        assert!(
+            status == 200 || status == 303 || status == 302,
+            "should redirect or show summary, got {status}"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn guide_page_returns_404_for_invalid_session() {
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get("/review/nonexistent-session/guide")
+            .await;
+
+        assert_eq!(res.status_code(), 404);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn can_skip_plan_generation() {
+    let session = create_test_session();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .post(&format!("/review/{session_id}/guide/plan/skip"))
+            .await;
+
+        let status = res.status_code();
+        assert!(
+            status == 200 || status == 303 || status == 302,
+            "should redirect to guide page, got {status}"
+        );
+
+        let loaded = ReviewSession::load(&session_id).unwrap();
+        assert!(loaded.review_plan.is_some(), "should have a review plan");
+        let plan = loaded.review_plan.unwrap();
+        assert_eq!(
+            plan.steps.len(),
+            2,
+            "fallback should create one step per file"
+        );
+        assert!(plan.steps[0].title.contains("src/lib.rs"));
+        assert!(plan.steps[1].title.contains("src/new.rs"));
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn summary_page_has_start_review_button() {
+    let session = create_test_session();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/summary"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(
+            body.contains("Start Review"),
+            "should have Start Review button"
+        );
+        assert!(
+            !body.contains("coming soon"),
+            "should not say coming soon anymore"
+        );
+        assert!(
+            body.contains("hx-post"),
+            "Start Review should use HTMX post"
+        );
+        assert!(
+            body.contains("/guide/start"),
+            "should post to guide/start endpoint"
         );
 
         cleanup_session(&session_id);

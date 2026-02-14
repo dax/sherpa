@@ -7,7 +7,9 @@ use crate::services::{
     ai_cli::{self, AiPrompt},
     cli_detection::AiCli,
     config::SherpaConfig,
-    review_session::{ChatMessage, ReviewSession},
+    review_session::{
+        fallback_review_plan, ChatMessage, ReviewPlan, ReviewSession, ReviewStep,
+    },
 };
 
 fn load_selected_cli() -> Option<AiCli> {
@@ -282,6 +284,146 @@ async fn summary_chat(
     )
 }
 
+#[debug_handler]
+async fn guide_start(
+    ViewEngine(v): ViewEngine<TeraView>,
+    Path(session_id): Path<String>,
+) -> Result<Response> {
+    let session = ReviewSession::load(&session_id).map_err(|e| {
+        tracing::error!("Failed to load session {session_id}: {e}");
+        Error::NotFound
+    })?;
+
+    if session.review_plan.is_some() {
+        return format::render().redirect(&format!("/review/{session_id}/guide"));
+    }
+
+    let cli = match load_selected_cli() {
+        Some(cli) => cli,
+        None => {
+            return format::render().view(
+                &v,
+                "review/_plan_error.html",
+                data!({
+                    "error": "No AI backend configured",
+                    "session_id": session_id,
+                }),
+            );
+        }
+    };
+
+    let context = build_ai_context(&session);
+    let prompt = AiPrompt {
+        context,
+        instruction: ai_cli::review_plan_instruction().to_string(),
+    };
+
+    match ai_cli::generate(cli, &prompt).await {
+        Ok(raw_response) => {
+            match ai_cli::extract_json_from_response(&raw_response)
+                .and_then(|json| {
+                    serde_json::from_str::<ReviewPlanResponse>(&json)
+                        .map_err(|e| format!("Failed to parse review plan JSON: {e}"))
+                })
+            {
+                Ok(plan_response) => {
+                    let mut session = ReviewSession::load(&session_id).map_err(|e| {
+                        tracing::error!("Failed to reload session: {e}");
+                        Error::NotFound
+                    })?;
+                    session.review_plan = Some(ReviewPlan {
+                        steps: plan_response.steps,
+                        generated_at: chrono_now(),
+                    });
+                    let _ = session.save();
+
+                    format::render().redirect(&format!("/review/{session_id}/guide"))
+                }
+                Err(error) => format::render().view(
+                    &v,
+                    "review/_plan_error.html",
+                    data!({
+                        "error": error,
+                        "session_id": session_id,
+                    }),
+                ),
+            }
+        }
+        Err(e) => format::render().view(
+            &v,
+            "review/_plan_error.html",
+            data!({
+                "error": e.to_string(),
+                "session_id": session_id,
+            }),
+        ),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ReviewPlanResponse {
+    steps: Vec<ReviewStep>,
+}
+
+#[debug_handler]
+async fn guide_plan_skip(Path(session_id): Path<String>) -> Result<Response> {
+    let mut session = ReviewSession::load(&session_id).map_err(|e| {
+        tracing::error!("Failed to load session {session_id}: {e}");
+        Error::NotFound
+    })?;
+
+    session.review_plan = Some(fallback_review_plan(&session));
+    let _ = session.save();
+
+    format::render().redirect(&format!("/review/{session_id}/guide"))
+}
+
+#[debug_handler]
+async fn guide_page(
+    ViewEngine(v): ViewEngine<TeraView>,
+    Path(session_id): Path<String>,
+) -> Result<Response> {
+    let session = ReviewSession::load(&session_id).map_err(|e| {
+        tracing::error!("Failed to load session {session_id}: {e}");
+        Error::NotFound
+    })?;
+
+    let plan = match &session.review_plan {
+        Some(plan) => plan.clone(),
+        None => {
+            return format::render().redirect(&format!("/review/{session_id}/summary"));
+        }
+    };
+
+    let steps_data: Vec<serde_json::Value> = plan
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(i, step)| {
+            let files: Vec<String> = step.file_refs.iter().map(|f| f.path.clone()).collect();
+            serde_json::json!({
+                "number": i + 1,
+                "title": step.title,
+                "rationale": step.rationale,
+                "file_count": step.file_refs.len(),
+                "files": files,
+            })
+        })
+        .collect();
+
+    format::render().view(
+        &v,
+        "review/guide.html",
+        data!({
+            "session_id": session.id,
+            "branch": session.branch,
+            "default_branch": session.default_branch,
+            "steps": steps_data,
+            "total_steps": plan.steps.len(),
+        }),
+    )
+}
+
 fn chrono_now() -> String {
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -304,6 +446,9 @@ pub fn page_routes() -> Routes {
         .add("/{session_id}/summary/approach", get(summary_approach))
         .add("/{session_id}/summary/skip/{section}", get(section_skip))
         .add("/{session_id}/summary/chat", post(summary_chat))
+        .add("/{session_id}/guide/start", post(guide_start))
+        .add("/{session_id}/guide/plan/skip", post(guide_plan_skip))
+        .add("/{session_id}/guide", get(guide_page))
 }
 
 pub fn api_routes() -> Routes {

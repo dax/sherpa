@@ -119,6 +119,56 @@ pub fn approach_instruction() -> &'static str {
      design patterns, architectural decisions, or trade-offs. Mention potential concerns if any."
 }
 
+pub fn review_plan_instruction() -> &'static str {
+    "Analyze this diff and create a step-by-step review plan. Group changes by \
+     feature, concept, or architectural layer — NOT necessarily one step per file. \
+     A single file's changes may appear in multiple steps if they serve different purposes.\n\n\
+     Respond with ONLY a JSON object inside a ```json fence, no other text:\n\
+     ```json\n\
+     {\n\
+       \"steps\": [\n\
+         {\n\
+           \"title\": \"Short descriptive title\",\n\
+           \"rationale\": \"Why review these changes together\",\n\
+           \"file_refs\": [\n\
+             {\"path\": \"src/foo.rs\", \"diff_lines\": [10, 45]},\n\
+             {\"path\": \"src/bar.rs\", \"diff_lines\": null}\n\
+           ]\n\
+         }\n\
+       ]\n\
+     }\n\
+     ```\n\
+     Use diff_lines to reference specific line ranges within each file's diff section, \
+     or null for the entire file. Order steps in recommended review sequence."
+}
+
+pub fn extract_json_from_response(raw: &str) -> Result<String, String> {
+    if serde_json::from_str::<serde_json::Value>(raw).is_ok() {
+        return Ok(raw.to_string());
+    }
+
+    if let Some(start) = raw.find("```json") {
+        let after = &raw[start + 7..];
+        if let Some(end) = after.find("```") {
+            let candidate = after[..end].trim();
+            if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+                return Ok(candidate.to_string());
+            }
+        }
+    }
+
+    if let (Some(s), Some(e)) = (raw.find('{'), raw.rfind('}')) {
+        if s < e {
+            let candidate = &raw[s..=e];
+            if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+                return Ok(candidate.to_string());
+            }
+        }
+    }
+
+    Err("Could not extract valid JSON from AI response".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +218,41 @@ mod tests {
         assert!(!overview_instruction().is_empty());
         assert!(!changes_instruction().is_empty());
         assert!(!approach_instruction().is_empty());
+        assert!(!review_plan_instruction().is_empty());
+    }
+
+    #[test]
+    fn test_extract_json_raw_json() {
+        let raw = r#"{"steps": [{"title": "t", "rationale": "r", "file_refs": []}]}"#;
+        let result = extract_json_from_response(raw).unwrap();
+        assert_eq!(result, raw);
+    }
+
+    #[test]
+    fn test_extract_json_fenced_block() {
+        let raw = "Here is the plan:\n```json\n{\"steps\": []}\n```\nDone.";
+        let result = extract_json_from_response(raw).unwrap();
+        assert_eq!(result, "{\"steps\": []}");
+    }
+
+    #[test]
+    fn test_extract_json_first_brace_to_last() {
+        let raw = "Some preamble text {\"steps\": []} and trailing text";
+        let result = extract_json_from_response(raw).unwrap();
+        assert_eq!(result, "{\"steps\": []}");
+    }
+
+    #[test]
+    fn test_extract_json_no_json() {
+        let raw = "This has no JSON at all";
+        let result = extract_json_from_response(raw);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_json_invalid_fenced_falls_back() {
+        let raw = "```json\nnot valid json\n```\n{\"valid\": true}";
+        let result = extract_json_from_response(raw).unwrap();
+        assert_eq!(result, "{\"valid\": true}");
     }
 }

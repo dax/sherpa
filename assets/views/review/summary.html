@@ -96,10 +96,15 @@
         </div>
     </div>
 
-    <div class="mt-6">
-        <button class="btn btn-primary w-full btn-lg" disabled>
-            Start Review (coming soon)
+    <div id="start-review-area" class="mt-6">
+        <button hx-post="/review/{{ session_id }}/guide/start"
+                hx-target="#start-review-area"
+                hx-swap="outerHTML"
+                hx-indicator="#start-review-spinner"
+                class="btn btn-primary w-full btn-lg">
+            Start Review
         </button>
+        <span id="start-review-spinner" class="loading loading-spinner loading-lg htmx-indicator mx-auto mt-2 block"></span>
     </div>
 </div>
 {% endblock %}

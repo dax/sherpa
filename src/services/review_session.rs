@@ -22,6 +22,28 @@ pub struct ChatMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewPlan {
+    pub steps: Vec<ReviewStep>,
+    pub generated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewStep {
+    pub title: String,
+    pub rationale: String,
+    pub file_refs: Vec<FileRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileRef {
+    pub path: String,
+    /// Optional line range within the per-file diff segment (start, end).
+    /// Refers to 1-indexed line numbers in the unified diff output for this file.
+    /// None means "entire file's diff."
+    pub diff_lines: Option<(usize, usize)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewSession {
     pub id: String,
     pub repo_path: String,
@@ -37,6 +59,8 @@ pub struct ReviewSession {
     pub chat_messages: Vec<ChatMessage>,
     #[serde(default)]
     pub metrics: DiffMetrics,
+    #[serde(default)]
+    pub review_plan: Option<ReviewPlan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -90,6 +114,7 @@ impl ReviewSession {
             summary: SummaryData::default(),
             chat_messages: Vec::new(),
             metrics,
+            review_plan: None,
         }
     }
 
@@ -128,6 +153,36 @@ impl ReviewSession {
         }
         let content = fs::read_to_string(path).map_err(SessionError::Io)?;
         serde_json::from_str(&content).map_err(SessionError::Parse)
+    }
+}
+
+pub fn fallback_review_plan(session: &ReviewSession) -> ReviewPlan {
+    let steps = session
+        .changed_files
+        .iter()
+        .map(|f| ReviewStep {
+            title: format!("Review {}", f.path),
+            rationale: format!("{} file", f.status),
+            file_refs: vec![FileRef {
+                path: f.path.clone(),
+                diff_lines: None,
+            }],
+        })
+        .collect();
+
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before UNIX epoch")
+        .as_millis();
+    let secs = millis / 1000;
+    let time_of_day = secs % 86400;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+
+    ReviewPlan {
+        steps,
+        generated_at: format!("{hours:02}:{minutes:02}:{seconds:02}"),
     }
 }
 
@@ -232,5 +287,108 @@ mod tests {
         let session = ReviewSession::new(make_test_analysis());
         assert!(session.created_at.ends_with('Z'));
         assert!(session.created_at.contains('T'));
+    }
+
+    #[test]
+    fn test_new_session_has_no_review_plan() {
+        let session = ReviewSession::new(make_test_analysis());
+        assert!(session.review_plan.is_none());
+    }
+
+    #[test]
+    fn test_fallback_review_plan_creates_one_step_per_file() {
+        let mut analysis = make_test_analysis();
+        analysis.changed_files = vec![
+            ChangedFile {
+                path: "src/lib.rs".to_string(),
+                status: FileStatus::Modified,
+            },
+            ChangedFile {
+                path: "src/new.rs".to_string(),
+                status: FileStatus::Added,
+            },
+            ChangedFile {
+                path: "src/old.rs".to_string(),
+                status: FileStatus::Deleted,
+            },
+        ];
+        let session = ReviewSession::new(analysis);
+        let plan = fallback_review_plan(&session);
+
+        assert_eq!(plan.steps.len(), 3);
+        assert_eq!(plan.steps[0].title, "Review src/lib.rs");
+        assert_eq!(plan.steps[0].file_refs.len(), 1);
+        assert_eq!(plan.steps[0].file_refs[0].path, "src/lib.rs");
+        assert!(plan.steps[0].file_refs[0].diff_lines.is_none());
+
+        assert_eq!(plan.steps[1].title, "Review src/new.rs");
+        assert!(plan.steps[1].rationale.contains("Added"));
+
+        assert_eq!(plan.steps[2].title, "Review src/old.rs");
+        assert!(plan.steps[2].rationale.contains("Deleted"));
+
+        assert!(!plan.generated_at.is_empty());
+    }
+
+    #[test]
+    fn test_review_plan_serialization_roundtrip() {
+        let plan = ReviewPlan {
+            steps: vec![ReviewStep {
+                title: "Core changes".to_string(),
+                rationale: "Foundation code".to_string(),
+                file_refs: vec![
+                    FileRef {
+                        path: "src/lib.rs".to_string(),
+                        diff_lines: Some((1, 20)),
+                    },
+                    FileRef {
+                        path: "src/main.rs".to_string(),
+                        diff_lines: None,
+                    },
+                ],
+            }],
+            generated_at: "12:00:00".to_string(),
+        };
+
+        let json = serde_json::to_string(&plan).unwrap();
+        let deserialized: ReviewPlan = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.steps.len(), 1);
+        assert_eq!(deserialized.steps[0].title, "Core changes");
+        assert_eq!(deserialized.steps[0].file_refs.len(), 2);
+        assert_eq!(deserialized.steps[0].file_refs[0].diff_lines, Some((1, 20)));
+        assert!(deserialized.steps[0].file_refs[1].diff_lines.is_none());
+    }
+
+    #[test]
+    fn test_session_with_review_plan_roundtrip() {
+        let dir = std::env::temp_dir().join("sherpa_test_sessions_plan");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut session = ReviewSession::new(make_test_analysis());
+        session.review_plan = Some(ReviewPlan {
+            steps: vec![ReviewStep {
+                title: "Test step".to_string(),
+                rationale: "Testing".to_string(),
+                file_refs: vec![FileRef {
+                    path: "file.rs".to_string(),
+                    diff_lines: None,
+                }],
+            }],
+            generated_at: "10:00:00".to_string(),
+        });
+
+        let file_path = dir.join(format!("{}.json", session.id));
+        let content = serde_json::to_string_pretty(&session).unwrap();
+        fs::write(&file_path, content).unwrap();
+
+        let loaded = ReviewSession::load_from(&file_path).unwrap();
+        assert!(loaded.review_plan.is_some());
+        let plan = loaded.review_plan.unwrap();
+        assert_eq!(plan.steps.len(), 1);
+        assert_eq!(plan.steps[0].title, "Test step");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
