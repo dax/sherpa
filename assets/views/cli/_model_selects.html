@@ -1,0 +1,37 @@
+<div class="space-y-3">
+    <div class="form-control">
+        <label class="label" for="deep-model">
+            <span class="label-text">Deep Thinking Model</span>
+            <span class="label-text-alt text-base-content/40">For approach & review planning</span>
+        </label>
+        <select name="deep_model"
+                id="deep-model"
+                class="select select-bordered w-full">
+            <option value="">CLI Default</option>
+            {% for m in models %}
+            <option value="{{ m }}" {% if deep_model and deep_model == m %}selected{% endif %}>{{ m }}</option>
+            {% endfor %}
+            {% if deep_model and deep_model not in models %}
+            <option value="{{ deep_model }}" selected>{{ deep_model }} (custom)</option>
+            {% endif %}
+        </select>
+    </div>
+    <div class="form-control">
+        <label class="label" for="fast-model">
+            <span class="label-text">Fast Model</span>
+            <span class="label-text-alt text-base-content/40">For explanations, chat & relations</span>
+        </label>
+        <select name="fast_model"
+                id="fast-model"
+                class="select select-bordered w-full">
+            <option value="">CLI Default</option>
+            {% for m in models %}
+            <option value="{{ m }}" {% if fast_model and fast_model == m %}selected{% endif %}>{{ m }}</option>
+            {% endfor %}
+            {% if fast_model and fast_model not in models %}
+            <option value="{{ fast_model }}" selected>{{ fast_model }} (custom)</option>
+            {% endif %}
+        </select>
+    </div>
+    <p class="text-xs text-base-content/40">Leave as "CLI Default" to use the backend's default model.</p>
+</div>

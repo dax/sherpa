@@ -36,7 +36,10 @@ async fn can_get_cli_status_api() {
         assert_eq!(res.status_code(), 200);
 
         let body: serde_json::Value = serde_json::from_str(&res.text()).unwrap();
-        assert!(body.get("tools").is_some(), "response should have tools array");
+        assert!(
+            body.get("tools").is_some(),
+            "response should have tools array"
+        );
         assert!(
             body.get("none_available").is_some(),
             "response should have none_available field"
@@ -53,10 +56,7 @@ async fn can_get_cli_status_api() {
 async fn cli_select_rejects_unknown_tool() {
     request::<App, _, _>(|request, _ctx| async move {
         let payload = serde_json::json!({"cli_tool": "unknown_tool"});
-        let res = request
-            .post("/cli/select")
-            .form(&payload)
-            .await;
+        let res = request.post("/cli/select").form(&payload).await;
 
         assert_eq!(res.status_code(), 200);
 
@@ -83,6 +83,59 @@ async fn home_page_shows_cli_status() {
         assert!(
             has_setup_link || has_backend_badge,
             "home page should show CLI setup link or current backend status"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn setup_page_has_model_select_dropdowns() {
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request.get("/cli/setup").await;
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(
+            body.contains(r#"<select"#),
+            "page should contain select elements for model selection"
+        );
+        assert!(
+            body.contains("CLI Default"),
+            "select should have a CLI Default option"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn cli_models_endpoint_returns_selects() {
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request.get("/cli/models?cli=claude").await;
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(body.contains(r#"<select"#), "should return select elements");
+        assert!(
+            body.contains("sonnet"),
+            "should contain claude model options"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn cli_models_endpoint_unknown_cli_returns_empty() {
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request.get("/cli/models?cli=unknown").await;
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(
+            body.contains("CLI Default"),
+            "should still show default option"
         );
     })
     .await;

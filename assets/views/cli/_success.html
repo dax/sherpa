@@ -2,5 +2,10 @@
     <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
     </svg>
-    <span><strong>{{ selected_name }}</strong> selected as your AI backend.</span>
+    <div>
+        <span><strong>{{ selected_name }}</strong> selected as your AI backend.</span>
+        <div class="text-xs mt-1 opacity-70">
+            Deep model: {% if deep_model %}{{ deep_model }}{% else %}default{% endif %} · Fast model: {% if fast_model %}{{ fast_model }}{% else %}default{% endif %}
+        </div>
+    </div>
 </div>

@@ -1,3 +1,4 @@
+use axum::extract::Query;
 use axum::Form;
 use loco_rs::prelude::*;
 use serde::Deserialize;
@@ -10,6 +11,13 @@ use crate::services::{
 #[derive(Deserialize)]
 pub struct CliSelectForm {
     cli_tool: String,
+    deep_model: Option<String>,
+    fast_model: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ModelsQuery {
+    cli: String,
 }
 
 #[debug_handler]
@@ -22,6 +30,12 @@ async fn cli_setup(ViewEngine(v): ViewEngine<TeraView>) -> Result<Response> {
         .selected_cli
         .or_else(|| detection.single_available());
 
+    let models = if let Some(cli) = pre_selected {
+        cli_detection::list_models(cli).await
+    } else {
+        Vec::new()
+    };
+
     format::render().view(
         &v,
         "cli/setup.html",
@@ -29,6 +43,34 @@ async fn cli_setup(ViewEngine(v): ViewEngine<TeraView>) -> Result<Response> {
             "tools": detection.tools,
             "none_available": detection.none_available(),
             "pre_selected": pre_selected,
+            "deep_model": config.ai.deep_model,
+            "fast_model": config.ai.fast_model,
+            "models": models,
+        }),
+    )
+}
+
+#[debug_handler]
+async fn cli_models(
+    ViewEngine(v): ViewEngine<TeraView>,
+    Query(query): Query<ModelsQuery>,
+) -> Result<Response> {
+    let cli = match query.cli.as_str() {
+        "opencode" => AiCli::Opencode,
+        "claude" => AiCli::Claude,
+        _ => return format::render().view(&v, "cli/_model_selects.html", data!({"models": []})),
+    };
+
+    let config = load_config();
+    let models = cli_detection::list_models(cli).await;
+
+    format::render().view(
+        &v,
+        "cli/_model_selects.html",
+        data!({
+            "models": models,
+            "deep_model": config.ai.deep_model,
+            "fast_model": config.ai.fast_model,
         }),
     )
 }
@@ -83,6 +125,14 @@ async fn cli_select(
 
     let mut config = load_config();
     config.ai.selected_cli = Some(selected);
+    config.ai.deep_model = form
+        .deep_model
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string());
+    config.ai.fast_model = form
+        .fast_model
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string());
 
     if let Err(e) = config.save(&config_path) {
         return format::render().view(
@@ -98,6 +148,8 @@ async fn cli_select(
         data!({
             "selected_name": selected.display_name(),
             "selected_value": selected.binary_name(),
+            "deep_model": config.ai.deep_model,
+            "fast_model": config.ai.fast_model,
         }),
     )
 }
@@ -114,6 +166,7 @@ pub fn page_routes() -> Routes {
         .prefix("/cli")
         .add("/setup", get(cli_setup))
         .add("/select", post(cli_select))
+        .add("/models", get(cli_models))
 }
 
 pub fn api_routes() -> Routes {
