@@ -4,7 +4,7 @@ use loco_rs::prelude::*;
 use serde::Deserialize;
 
 use crate::services::{
-    ai_cli::{self, AiPrompt},
+    ai_cli::{self, AiCliError, AiPrompt, DEFAULT_TIMEOUT_SECS},
     cli_detection::AiCli,
     config::SherpaConfig,
     git_analysis,
@@ -13,11 +13,42 @@ use crate::services::{
     },
 };
 
-fn load_selected_cli() -> Option<AiCli> {
-    SherpaConfig::default_path()
+struct AiSettings {
+    cli: AiCli,
+    timeout: std::time::Duration,
+}
+
+fn load_ai_settings() -> Option<AiSettings> {
+    let config = SherpaConfig::default_path()
         .ok()
         .and_then(|p| SherpaConfig::load(&p).ok())
-        .and_then(|c| c.ai.selected_cli)
+        .unwrap_or_default();
+
+    let cli = config.ai.selected_cli?;
+    let timeout_secs = config.ai.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
+    Some(AiSettings {
+        cli,
+        timeout: std::time::Duration::from_secs(timeout_secs),
+    })
+}
+
+fn log_ai_error(error: &AiCliError) {
+    tracing::error!("AI CLI call failed: {error}");
+
+    if let Ok(log_dir) = SherpaConfig::config_dir().map(|d| d.join("logs")) {
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_path = log_dir.join("ai_errors.log");
+        let timestamp = chrono_now();
+        let line = format!("[{timestamp}] {error}\n");
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            use std::io::Write;
+            let _ = file.write_all(line.as_bytes());
+        }
+    }
 }
 
 fn build_changed_files_summary(session: &ReviewSession) -> String {
@@ -76,16 +107,19 @@ async fn generate_section(
         return Ok((cached.clone(), true));
     }
 
-    let cli = load_selected_cli().ok_or("No AI backend configured")?;
+    let settings = load_ai_settings().ok_or("No AI backend configured")?;
     let context = build_ai_context(&session);
     let prompt = AiPrompt {
         context,
         instruction: instruction.to_string(),
     };
 
-    let content = ai_cli::generate(cli, &prompt)
+    let content = ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            log_ai_error(&e);
+            e.to_string()
+        })?;
 
     let mut session = ReviewSession::load(session_id)
         .map_err(|e| format!("Failed to reload session: {e}"))?;
@@ -251,8 +285,8 @@ async fn summary_chat(
     };
     session.chat_messages.push(user_msg);
 
-    let cli = load_selected_cli();
-    let ai_response = if let Some(cli) = cli {
+    let settings = load_ai_settings();
+    let ai_response = if let Some(settings) = settings {
         let context = build_ai_context(&session);
         let prompt = AiPrompt {
             context,
@@ -261,9 +295,12 @@ async fn summary_chat(
                 form.message
             ),
         };
-        match ai_cli::generate(cli, &prompt).await {
+        match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout).await {
             Ok(response) => response,
-            Err(e) => format!("AI error: {e}"),
+            Err(e) => {
+                log_ai_error(&e);
+                format!("AI error: {e}")
+            }
         }
     } else {
         "No AI backend configured. Please set up an AI backend first.".to_string()
@@ -301,8 +338,8 @@ async fn guide_start(
         return format::render().redirect(&format!("/review/{session_id}/guide"));
     }
 
-    let cli = match load_selected_cli() {
-        Some(cli) => cli,
+    let settings = match load_ai_settings() {
+        Some(s) => s,
         None => {
             return format::render().view(
                 &v,
@@ -321,7 +358,7 @@ async fn guide_start(
         instruction: ai_cli::review_plan_instruction().to_string(),
     };
 
-    match ai_cli::generate(cli, &prompt).await {
+    match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout).await {
         Ok(raw_response) => {
             match ai_cli::extract_json_from_response(&raw_response)
                 .and_then(|json| {
@@ -352,14 +389,17 @@ async fn guide_start(
                 ),
             }
         }
-        Err(e) => format::render().view(
-            &v,
-            "review/_plan_error.html",
-            data!({
-                "error": e.to_string(),
-                "session_id": session_id,
-            }),
-        ),
+        Err(e) => {
+            log_ai_error(&e);
+            format::render().view(
+                &v,
+                "review/_plan_error.html",
+                data!({
+                    "error": e.to_string(),
+                    "session_id": session_id,
+                }),
+            )
+        }
     }
 }
 
@@ -574,8 +614,8 @@ async fn step_explanation(
         );
     }
 
-    let cli = match load_selected_cli() {
-        Some(cli) => cli,
+    let settings = match load_ai_settings() {
+        Some(s) => s,
         None => {
             return format::render().view(
                 &v,
@@ -605,7 +645,7 @@ async fn step_explanation(
         instruction: ai_cli::step_explanation_instruction(&step.title, &step_diff),
     };
 
-    match ai_cli::generate(cli, &prompt).await {
+    match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout).await {
         Ok(content) => {
             let mut session = ReviewSession::load(&session_id).map_err(|e| {
                 tracing::error!("Failed to reload session: {e}");
@@ -622,18 +662,21 @@ async fn step_explanation(
                 data!({"title": "Step Explanation", "content": content, "section_id": "step-explanation"}),
             )
         }
-        Err(e) => format::render().view(
-            &v,
-            "review/_section_error.html",
-            data!({
-                "title": "Step Explanation",
-                "error": e.to_string(),
-                "section_id": "step-explanation",
-                "session_id": session_id,
-                "retry_url": format!("/review/{session_id}/guide/step/{step_number}/explanation"),
-                "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/explanation"),
-            }),
-        ),
+        Err(e) => {
+            log_ai_error(&e);
+            format::render().view(
+                &v,
+                "review/_section_error.html",
+                data!({
+                    "title": "Step Explanation",
+                    "error": e.to_string(),
+                    "section_id": "step-explanation",
+                    "session_id": session_id,
+                    "retry_url": format!("/review/{session_id}/guide/step/{step_number}/explanation"),
+                    "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/explanation"),
+                }),
+            )
+        }
     }
 }
 
@@ -663,8 +706,8 @@ async fn step_relation(
         );
     }
 
-    let cli = match load_selected_cli() {
-        Some(cli) => cli,
+    let settings = match load_ai_settings() {
+        Some(s) => s,
         None => {
             return format::render().view(
                 &v,
@@ -695,7 +738,7 @@ async fn step_relation(
         instruction: ai_cli::step_relation_instruction(prev_title, &step.title, &step_diff),
     };
 
-    match ai_cli::generate(cli, &prompt).await {
+    match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout).await {
         Ok(content) => {
             let mut session = ReviewSession::load(&session_id).map_err(|e| {
                 tracing::error!("Failed to reload session: {e}");
@@ -712,18 +755,21 @@ async fn step_relation(
                 data!({"title": "Relation to Previous Step", "content": content, "section_id": "step-relation"}),
             )
         }
-        Err(e) => format::render().view(
-            &v,
-            "review/_section_error.html",
-            data!({
-                "title": "Relation to Previous Step",
-                "error": e.to_string(),
-                "section_id": "step-relation",
-                "session_id": session_id,
-                "retry_url": format!("/review/{session_id}/guide/step/{step_number}/relation"),
-                "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/relation"),
-            }),
-        ),
+        Err(e) => {
+            log_ai_error(&e);
+            format::render().view(
+                &v,
+                "review/_section_error.html",
+                data!({
+                    "title": "Relation to Previous Step",
+                    "error": e.to_string(),
+                    "section_id": "step-relation",
+                    "session_id": session_id,
+                    "retry_url": format!("/review/{session_id}/guide/step/{step_number}/relation"),
+                    "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/relation"),
+                }),
+            )
+        }
     }
 }
 
@@ -753,8 +799,8 @@ async fn step_symbols(
         );
     }
 
-    let cli = match load_selected_cli() {
-        Some(cli) => cli,
+    let settings = match load_ai_settings() {
+        Some(s) => s,
         None => {
             return format::render().view(
                 &v,
@@ -784,7 +830,7 @@ async fn step_symbols(
         instruction: ai_cli::step_symbols_instruction(&step_diff),
     };
 
-    match ai_cli::generate(cli, &prompt).await {
+    match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout).await {
         Ok(raw) => {
             match ai_cli::extract_json_from_response(&raw)
                 .and_then(|json| {
@@ -822,18 +868,21 @@ async fn step_symbols(
                 ),
             }
         }
-        Err(e) => format::render().view(
-            &v,
-            "review/_section_error.html",
-            data!({
-                "title": "Changed Symbols",
-                "error": e.to_string(),
-                "section_id": "step-symbols",
-                "session_id": session_id,
-                "retry_url": format!("/review/{session_id}/guide/step/{step_number}/symbols"),
-                "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/symbols"),
-            }),
-        ),
+        Err(e) => {
+            log_ai_error(&e);
+            format::render().view(
+                &v,
+                "review/_section_error.html",
+                data!({
+                    "title": "Changed Symbols",
+                    "error": e.to_string(),
+                    "section_id": "step-symbols",
+                    "session_id": session_id,
+                    "retry_url": format!("/review/{session_id}/guide/step/{step_number}/symbols"),
+                    "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/symbols"),
+                }),
+            )
+        }
     }
 }
 
@@ -877,8 +926,8 @@ async fn step_chat(
     };
     session.chat_messages.push(user_msg);
 
-    let cli = load_selected_cli();
-    let ai_response = if let Some(cli) = cli {
+    let settings = load_ai_settings();
+    let ai_response = if let Some(settings) = settings {
         let context = build_ai_context(&session);
         let instruction =
             ai_cli::step_chat_instruction(&step_title, &step_diff, &explanation, &form.message);
@@ -886,9 +935,12 @@ async fn step_chat(
             context,
             instruction,
         };
-        match ai_cli::generate(cli, &prompt).await {
+        match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout).await {
             Ok(response) => response,
-            Err(e) => format!("AI error: {e}"),
+            Err(e) => {
+                log_ai_error(&e);
+                format!("AI error: {e}")
+            }
         }
     } else {
         "No AI backend configured. Please set up an AI backend first.".to_string()

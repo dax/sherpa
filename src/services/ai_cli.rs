@@ -4,7 +4,7 @@ use tokio::process::Command;
 
 use super::cli_detection::AiCli;
 
-const DEFAULT_TIMEOUT_SECS: u64 = 120;
+pub const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 #[derive(Debug)]
 pub struct AiPrompt {
@@ -268,6 +268,35 @@ mod tests {
             stderr: "some error".to_string(),
         };
         assert!(err.to_string().contains("some error"));
+
+        let err = AiCliError::SpawnFailed(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not found",
+        ));
+        assert!(err.to_string().contains("Failed to start AI CLI"));
+    }
+
+    #[test]
+    fn test_default_timeout_secs_is_120() {
+        assert_eq!(DEFAULT_TIMEOUT_SECS, 120);
+    }
+
+    #[tokio::test]
+    async fn test_generate_with_timeout_returns_timeout_error() {
+        let prompt = AiPrompt {
+            context: "test".to_string(),
+            instruction: "test".to_string(),
+        };
+        let result = generate_with_timeout(
+            AiCli::Claude,
+            &prompt,
+            Duration::from_millis(1),
+        )
+        .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let is_timeout_or_spawn = matches!(err, AiCliError::Timeout | AiCliError::SpawnFailed(_));
+        assert!(is_timeout_or_spawn);
     }
 
     #[test]

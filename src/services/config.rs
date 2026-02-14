@@ -15,6 +15,8 @@ pub struct SherpaConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AiConfig {
     pub selected_cli: Option<AiCli>,
+    /// AI CLI call timeout in seconds (default: 120)
+    pub timeout_secs: Option<u64>,
 }
 
 impl SherpaConfig {
@@ -83,6 +85,7 @@ mod tests {
     fn test_default_config() {
         let config = SherpaConfig::default();
         assert!(config.ai.selected_cli.is_none());
+        assert!(config.ai.timeout_secs.is_none());
     }
 
     #[test]
@@ -114,6 +117,41 @@ mod tests {
         let path = PathBuf::from("/tmp/sherpa_nonexistent_test/config.toml");
         let config = SherpaConfig::load(&path).unwrap();
         assert!(config.ai.selected_cli.is_none());
+    }
+
+    #[test]
+    fn test_timeout_config_roundtrip() {
+        let dir = std::env::temp_dir().join("sherpa_test_config_timeout");
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+
+        let mut config = SherpaConfig::default();
+        config.ai.selected_cli = Some(AiCli::Claude);
+        config.ai.timeout_secs = Some(60);
+        config.save(&path).unwrap();
+
+        let loaded = SherpaConfig::load(&path).unwrap();
+        assert_eq!(loaded.ai.timeout_secs, Some(60));
+        assert_eq!(loaded.ai.selected_cli, Some(AiCli::Claude));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_config_without_timeout_defaults_to_none() {
+        let dir = std::env::temp_dir().join("sherpa_test_config_no_timeout");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+
+        let content = "[ai]\nselected_cli = \"claude\"\n";
+        fs::write(&path, content).unwrap();
+
+        let loaded = SherpaConfig::load(&path).unwrap();
+        assert_eq!(loaded.ai.selected_cli, Some(AiCli::Claude));
+        assert!(loaded.ai.timeout_secs.is_none());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
