@@ -15,10 +15,17 @@
 
         <ul class="steps steps-vertical w-full">
             {% for step in steps %}
-            <li class="step" data-step="{{ step.number }}">
+            <li class="step {% if step.validated %}step-success{% endif %}" data-step="{{ step.number }}">
                 <a href="/review/{{ session_id }}/guide/step/{{ step.number }}" class="w-full">
                     <div class="text-left w-full py-2">
-                        <div class="font-medium text-sm">{{ step.title }}</div>
+                        <div class="font-medium text-sm flex items-center gap-1">
+                            {% if step.validated %}
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-success inline-block shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                            </svg>
+                            {% endif %}
+                            {{ step.title }}
+                        </div>
                         <div class="text-xs text-base-content/50">
                             {{ step.file_count }} file{% if step.file_count != 1 %}s{% endif %}
                         </div>
@@ -39,7 +46,7 @@
         <div class="max-w-4xl mx-auto">
             <div class="flex items-center justify-between mb-6">
                 <h1 class="text-2xl font-bold">Guided Review</h1>
-                <span class="badge badge-lg">{{ total_steps }} steps</span>
+                <span class="badge badge-lg">{{ validated_count }}/{{ total_steps }} validated</span>
             </div>
 
             <div class="space-y-4">
@@ -47,7 +54,9 @@
                 <div class="card bg-base-100 shadow">
                     <div class="card-body">
                         <div class="flex items-start gap-3">
-                            <span class="badge badge-primary badge-lg font-mono">{{ step.number }}</span>
+                            <span class="badge {% if step.validated %}badge-success{% else %}badge-primary{% endif %} badge-lg font-mono">
+                                {% if step.validated %}&#10003;{% else %}{{ step.number }}{% endif %}
+                            </span>
                             <div class="flex-1">
                                 <h3 class="card-title text-lg">{{ step.title }}</h3>
                                 <p class="text-sm text-base-content/70 mt-1">{{ step.rationale }}</p>

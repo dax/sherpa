@@ -398,21 +398,28 @@ async fn guide_page(
         }
     };
 
+    let mut session = session;
+    session.ensure_validated_steps_size();
+
     let steps_data: Vec<serde_json::Value> = plan
         .steps
         .iter()
         .enumerate()
         .map(|(i, step)| {
             let files: Vec<String> = step.file_refs.iter().map(|f| f.path.clone()).collect();
+            let validated = session.validated_steps.get(i).copied().unwrap_or(false);
             serde_json::json!({
                 "number": i + 1,
                 "title": step.title,
                 "rationale": step.rationale,
                 "file_count": step.file_refs.len(),
                 "files": files,
+                "validated": validated,
             })
         })
         .collect();
+
+    let validated_count = session.validated_steps.iter().filter(|&&v| v).count();
 
     format::render().view(
         &v,
@@ -423,6 +430,7 @@ async fn guide_page(
             "default_branch": session.default_branch,
             "steps": steps_data,
             "total_steps": plan.steps.len(),
+            "validated_count": validated_count,
         }),
     )
 }
@@ -462,6 +470,9 @@ async fn step_page(
         return Err(Error::NotFound);
     }
 
+    let mut session = session;
+    session.ensure_validated_steps_size();
+
     let step = &plan.steps[step_number - 1];
     let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
         .file_refs
@@ -477,14 +488,22 @@ async fn step_page(
         .iter()
         .enumerate()
         .map(|(i, s)| {
+            let validated = session.validated_steps.get(i).copied().unwrap_or(false);
             serde_json::json!({
                 "number": i + 1,
                 "title": s.title,
                 "file_count": s.file_refs.len(),
                 "active": i + 1 == step_number,
+                "validated": validated,
             })
         })
         .collect();
+
+    let current_step_validated = session
+        .validated_steps
+        .get(step_number - 1)
+        .copied()
+        .unwrap_or(false);
 
     let has_previous = step_number > 1;
     let prev_step_title = if has_previous {
@@ -524,6 +543,7 @@ async fn step_page(
             "has_previous": has_previous,
             "prev_step_title": prev_step_title,
             "chat_messages": chat_messages,
+            "current_step_validated": current_step_validated,
         }),
     )
 }
@@ -893,6 +913,32 @@ async fn step_chat(
 }
 
 #[debug_handler]
+async fn step_validate(
+    Path((session_id, step_number)): Path<(String, usize)>,
+) -> Result<Response> {
+    let mut session = ReviewSession::load(&session_id).map_err(|e| {
+        tracing::error!("Failed to load session {session_id}: {e}");
+        Error::NotFound
+    })?;
+
+    let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
+    let total_steps = plan.steps.len();
+    if step_number < 1 || step_number > total_steps {
+        return Err(Error::NotFound);
+    }
+
+    session.ensure_validated_steps_size();
+    session.validated_steps[step_number - 1] = true;
+    let _ = session.save();
+
+    if step_number < total_steps {
+        format::render().redirect(&format!("/review/{session_id}/guide/step/{}", step_number + 1))
+    } else {
+        format::render().redirect(&format!("/review/{session_id}/guide"))
+    }
+}
+
+#[debug_handler]
 async fn step_section_skip(
     ViewEngine(v): ViewEngine<TeraView>,
     Path((session_id, step_number, section)): Path<(String, usize, String)>,
@@ -939,6 +985,7 @@ pub fn page_routes() -> Routes {
         .add("/{session_id}/guide/step/{step_number}/relation", get(step_relation))
         .add("/{session_id}/guide/step/{step_number}/symbols", get(step_symbols))
         .add("/{session_id}/guide/step/{step_number}/chat", post(step_chat))
+        .add("/{session_id}/guide/step/{step_number}/validate", post(step_validate))
         .add("/{session_id}/guide/step/{step_number}/skip/{section}", get(step_section_skip))
         .add("/{session_id}/guide", get(guide_page))
 }

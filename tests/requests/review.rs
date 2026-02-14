@@ -372,8 +372,8 @@ async fn step_page_shows_navigation() {
         assert_eq!(res.status_code(), 200);
         let body = res.text();
         assert!(
-            body.contains("Next Step"),
-            "step 1 should have Next Step button"
+            body.contains("Validate"),
+            "step 1 should have Validate & Next button"
         );
         assert!(
             !body.contains("prev_step_title"),
@@ -661,4 +661,209 @@ async fn step_chat_returns_404_for_invalid_session() {
         assert_eq!(res.status_code(), 404);
     })
     .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn can_validate_step() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .post(&format!("/review/{session_id}/guide/step/1/validate"))
+            .await;
+
+        let status = res.status_code();
+        assert!(
+            status == 200 || status == 303 || status == 302,
+            "should redirect to next step, got {status}"
+        );
+
+        let loaded = ReviewSession::load(&session_id).unwrap();
+        assert_eq!(loaded.validated_steps.len(), 2);
+        assert!(loaded.validated_steps[0], "step 1 should be validated");
+        assert!(!loaded.validated_steps[1], "step 2 should not be validated");
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn validate_last_step_redirects_to_guide() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .post(&format!("/review/{session_id}/guide/step/2/validate"))
+            .await;
+
+        let status = res.status_code();
+        assert!(
+            status == 200 || status == 303 || status == 302,
+            "should redirect to guide page, got {status}"
+        );
+
+        let loaded = ReviewSession::load(&session_id).unwrap();
+        assert!(loaded.validated_steps[1], "step 2 should be validated");
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn validate_returns_404_for_invalid_step() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .post(&format!("/review/{session_id}/guide/step/99/validate"))
+            .await;
+
+        assert_eq!(res.status_code(), 404);
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn validate_returns_404_for_invalid_session() {
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .post("/review/nonexistent-session/guide/step/1/validate")
+            .await;
+
+        assert_eq!(res.status_code(), 404);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn step_page_shows_validate_button() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide/step/1"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+        let body = res.text();
+        assert!(
+            body.contains("Validate"),
+            "should have Validate button"
+        );
+        assert!(
+            body.contains("/validate"),
+            "should post to validate endpoint"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn validated_step_shows_checkmark_in_sidebar() {
+    let mut session = create_session_with_plan();
+    session.validated_steps = vec![true, false];
+    session.save().expect("save session with validation");
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide/step/2"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+        let body = res.text();
+        assert!(
+            body.contains("step-success"),
+            "validated step should have step-success class in sidebar"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn guide_page_shows_validation_progress() {
+    let mut session = create_session_with_plan();
+    session.validated_steps = vec![true, false];
+    session.save().expect("save session with validation");
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+        let body = res.text();
+        assert!(
+            body.contains("1/2 validated"),
+            "should show validation progress"
+        );
+        assert!(
+            body.contains("step-success"),
+            "validated step should have step-success class"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn previous_button_does_not_unvalidate() {
+    let mut session = create_session_with_plan();
+    session.validated_steps = vec![true, false];
+    session.save().expect("save session with validation");
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide/step/1"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+
+        let loaded = ReviewSession::load(&session_id).unwrap();
+        assert!(
+            loaded.validated_steps[0],
+            "revisiting step 1 should not unvalidate it"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn validation_state_persists_across_loads() {
+    let mut session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    session.validated_steps = vec![true, true];
+    session.save().expect("save validated session");
+
+    let loaded = ReviewSession::load(&session_id).unwrap();
+    assert_eq!(loaded.validated_steps, vec![true, true]);
+
+    cleanup_session(&session_id);
 }

@@ -15,10 +15,17 @@
 
         <ul class="steps steps-vertical w-full">
             {% for step in steps %}
-            <li class="step {% if step.active %}step-primary{% endif %}">
+            <li class="step {% if step.active %}step-primary{% elif step.validated %}step-success{% endif %}">
                 <a href="/review/{{ session_id }}/guide/step/{{ step.number }}" class="w-full">
                     <div class="text-left w-full py-2">
-                        <div class="font-medium text-sm">{{ step.title }}</div>
+                        <div class="font-medium text-sm flex items-center gap-1">
+                            {% if step.validated %}
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-success inline-block shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                            </svg>
+                            {% endif %}
+                            {{ step.title }}
+                        </div>
                         <div class="text-xs text-base-content/50">
                             {{ step.file_count }} file{% if step.file_count != 1 %}s{% endif %}
                         </div>
@@ -128,15 +135,38 @@
                 <div></div>
                 {% endif %}
 
-                {% if step_number < total_steps %}
-                <a href="/review/{{ session_id }}/guide/step/{{ step_number + 1 }}" class="btn btn-primary btn-sm">
-                    Next Step &rarr;
-                </a>
-                {% else %}
-                <a href="/review/{{ session_id }}/guide" class="btn btn-primary btn-sm">
-                    Back to Guide
-                </a>
-                {% endif %}
+                <div class="flex gap-2">
+                    {% if current_step_validated %}
+                    <span class="badge badge-success badge-lg gap-1 self-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                        </svg>
+                        Validated
+                    </span>
+                    {% endif %}
+
+                    {% if step_number < total_steps %}
+                    <form method="post" action="/review/{{ session_id }}/guide/step/{{ step_number }}/validate">
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            {% if current_step_validated %}
+                            Next Step &rarr;
+                            {% else %}
+                            Validate &amp; Next &rarr;
+                            {% endif %}
+                        </button>
+                    </form>
+                    {% else %}
+                    <form method="post" action="/review/{{ session_id }}/guide/step/{{ step_number }}/validate">
+                        <button type="submit" class="btn btn-primary btn-sm">
+                            {% if current_step_validated %}
+                            Back to Guide
+                            {% else %}
+                            Validate &amp; Finish
+                            {% endif %}
+                        </button>
+                    </form>
+                    {% endif %}
+                </div>
             </div>
         </div>
     </main>

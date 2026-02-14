@@ -81,6 +81,8 @@ pub struct ReviewSession {
     pub metrics: DiffMetrics,
     #[serde(default)]
     pub review_plan: Option<ReviewPlan>,
+    #[serde(default)]
+    pub validated_steps: Vec<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -135,6 +137,16 @@ impl ReviewSession {
             chat_messages: Vec::new(),
             metrics,
             review_plan: None,
+            validated_steps: Vec::new(),
+        }
+    }
+
+    pub fn ensure_validated_steps_size(&mut self) {
+        if let Some(plan) = &self.review_plan {
+            let needed = plan.steps.len();
+            if self.validated_steps.len() < needed {
+                self.validated_steps.resize(needed, false);
+            }
         }
     }
 
