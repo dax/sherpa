@@ -1,35 +1,21 @@
-use axum::extract::Path;
+use axum::extract::{Path, State};
+use axum::response::IntoResponse;
 use axum::Form;
 use loco_rs::prelude::*;
+use sea_orm::DatabaseConnection;
 use serde::Deserialize;
 
+use crate::models::{ai_analyses, chat_messages, review_sessions};
 use crate::services::{
-    ai_cli::{self, AiCliError, AiPrompt, DEFAULT_TIMEOUT_SECS},
-    cli_detection::AiCli,
+    ai_cli::{self, AiCliError, AiPrompt, AiSettings, ModelTier, PrimedSession},
+    background_analysis,
     config::SherpaConfig,
-    git_analysis,
-    review_session::{
-        fallback_review_plan, ChatMessage, ReviewPlan, ReviewSession, ReviewStep, SymbolInfo,
-    },
+    git_analysis, markdown,
+    review_session::{fallback_review_plan, ChatMessage, ReviewPlan, ReviewSession, ReviewStep},
 };
 
-struct AiSettings {
-    cli: AiCli,
-    timeout: std::time::Duration,
-}
-
 fn load_ai_settings() -> Option<AiSettings> {
-    let config = SherpaConfig::default_path()
-        .ok()
-        .and_then(|p| SherpaConfig::load(&p).ok())
-        .unwrap_or_default();
-
-    let cli = config.ai.selected_cli?;
-    let timeout_secs = config.ai.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
-    Some(AiSettings {
-        cli,
-        timeout: std::time::Duration::from_secs(timeout_secs),
-    })
+    ai_cli::load_ai_settings()
 }
 
 fn log_ai_error(error: &AiCliError) {
@@ -73,61 +59,73 @@ fn build_ai_context(session: &ReviewSession) -> String {
 #[debug_handler]
 async fn summary_page(
     ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
     Path(session_id): Path<String>,
 ) -> Result<Response> {
-    let mut session = ReviewSession::load(&session_id).map_err(|e| {
-        tracing::error!("Failed to load session {session_id}: {e}");
-        Error::NotFound
-    })?;
+    let (model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let session_db_id = model.id;
 
     session.ensure_validated_steps_size();
 
-    let all_validated = !session.validated_steps.is_empty()
-        && session.validated_steps.iter().all(|&v| v);
+    let all_validated =
+        !session.validated_steps.is_empty() && session.validated_steps.iter().all(|&v| v);
+
+    let db_messages = chat_messages::find_by_session(&ctx.db, session_db_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error loading chat messages: {e}");
+            Error::InternalServerError
+        })?;
 
     let reviewed_steps: Vec<serde_json::Value> = if all_validated {
         if let Some(ref plan) = session.review_plan {
-            plan.steps
-                .iter()
-                .enumerate()
-                .map(|(i, step)| {
-                    let step_number = i + 1;
-                    let files: Vec<String> =
-                        step.file_refs.iter().map(|f| f.path.clone()).collect();
-                    let explanation = step
-                        .ai_data
-                        .explanation
-                        .clone()
-                        .unwrap_or_default();
-                    let step_chat: Vec<serde_json::Value> = session
-                        .chat_messages
-                        .iter()
-                        .filter(|msg| msg.step_number == Some(step_number))
-                        .map(|msg| {
-                            serde_json::json!({
-                                "role": msg.role,
-                                "content": msg.content,
-                                "timestamp": msg.timestamp,
-                            })
-                        })
-                        .collect();
-                    serde_json::json!({
-                        "number": step_number,
-                        "title": step.title,
-                        "rationale": step.rationale,
-                        "files": files,
-                        "explanation": explanation,
-                        "chat_messages": step_chat,
-                        "has_chat": !step_chat.is_empty(),
-                    })
-                })
-                .collect()
+            let mut steps_json = Vec::new();
+            for (i, step) in plan.steps.iter().enumerate() {
+                let step_number = i + 1;
+                let files: Vec<String> = step.file_refs.iter().map(|f| f.path.clone()).collect();
+
+                let explanation = ai_analyses::find_cached(
+                    &ctx.db,
+                    session_db_id,
+                    "step_explanation",
+                    Some(step_number as i32),
+                )
+                .await
+                .map_err(|e| {
+                    tracing::error!("DB error loading step explanation: {e}");
+                    Error::InternalServerError
+                })?
+                .map(|c| markdown::to_html(&c))
+                .unwrap_or_default();
+
+                let step_chat: Vec<serde_json::Value> = db_messages
+                    .iter()
+                    .filter(|msg| msg.step_number == Some(step_number as i32))
+                    .map(|msg| chat_msg_to_json(msg, None))
+                    .collect();
+
+                steps_json.push(serde_json::json!({
+                    "number": step_number,
+                    "title": step.title,
+                    "rationale": step.rationale,
+                    "files": files,
+                    "explanation": explanation,
+                    "chat_messages": step_chat,
+                    "has_chat": !step_chat.is_empty(),
+                }));
+            }
+            steps_json
         } else {
             Vec::new()
         }
     } else {
         Vec::new()
     };
+
+    let chat_messages_json: Vec<serde_json::Value> = db_messages
+        .iter()
+        .map(|msg| chat_msg_to_json(msg, None))
+        .collect();
 
     format::render().view(
         &v,
@@ -137,135 +135,134 @@ async fn summary_page(
             "branch": session.branch,
             "default_branch": session.default_branch,
             "metrics": session.metrics,
-            "chat_messages": session.chat_messages,
+            "chat_messages": chat_messages_json,
             "all_validated": all_validated,
             "reviewed_steps": reviewed_steps,
         }),
     )
 }
 
-async fn generate_section(
+async fn load_session_from_db(
+    db: &DatabaseConnection,
     session_id: &str,
-    _section: &str,
-    instruction: &str,
-    get_cached: fn(&ReviewSession) -> &Option<String>,
-    set_cached: fn(&mut ReviewSession, String),
-) -> std::result::Result<(String, bool), String> {
-    let session = ReviewSession::load(session_id)
-        .map_err(|e| format!("Failed to load session: {e}"))?;
+) -> Result<(review_sessions::Model, ReviewSession)> {
+    let model = review_sessions::Model::find_by_session_key(db, session_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error loading session {session_id}: {e}");
+            Error::InternalServerError
+        })?
+        .ok_or_else(|| {
+            tracing::error!("Session not found in DB: {session_id}");
+            Error::NotFound
+        })?;
+    let session = model.to_review_session();
+    Ok((model, session))
+}
 
-    if let Some(cached) = get_cached(&session) {
-        return Ok((cached.clone(), true));
+fn chat_msg_to_json(msg: &chat_messages::Model, current_step: Option<usize>) -> serde_json::Value {
+    let content = if msg.role == "assistant" {
+        markdown::to_html(&msg.content)
+    } else {
+        msg.content.clone()
+    };
+    let step_number = msg.step_number;
+    let timestamp = msg.created_at.format("%H:%M:%S").to_string();
+    serde_json::json!({
+        "role": msg.role,
+        "content": content,
+        "timestamp": timestamp,
+        "step_number": step_number,
+        "is_current_step": current_step.is_some() && step_number == current_step.map(|n| n as i32),
+    })
+}
+
+async fn generate_with_fork_or_fallback(
+    settings: &AiSettings,
+    primed: Option<&PrimedSession>,
+    instruction: &str,
+    context: &str,
+    tier: ModelTier,
+) -> std::result::Result<String, ai_cli::AiCliError> {
+    let model = settings.model_for_tier(tier);
+
+    if let Some(primed) = primed {
+        match ai_cli::generate_forked(primed, instruction, settings.timeout, model).await {
+            Ok(content) => return Ok(content),
+            Err(e) => {
+                tracing::warn!("Forked generation failed ({e}), falling back to legacy");
+            }
+        }
+    }
+
+    let prompt = AiPrompt {
+        context: context.to_string(),
+        instruction: instruction.to_string(),
+    };
+    ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout, model).await
+}
+
+fn build_primed_session(session: &ReviewSession) -> Option<PrimedSession> {
+    let sid = session.primed_session_id.as_ref()?;
+    let settings = load_ai_settings()?;
+    Some(PrimedSession {
+        session_id: sid.clone(),
+        cli: settings.cli,
+    })
+}
+
+async fn generate_section(
+    db: &DatabaseConnection,
+    session_db_id: i32,
+    analysis_type: &str,
+    instruction: &str,
+    context: &str,
+    tier: ModelTier,
+    primed: Option<&PrimedSession>,
+) -> std::result::Result<(String, bool), String> {
+    if let Some(cached) = ai_analyses::find_cached(db, session_db_id, analysis_type, None)
+        .await
+        .map_err(|e| format!("DB error checking cache: {e}"))?
+    {
+        return Ok((markdown::to_html(&cached), true));
     }
 
     let settings = load_ai_settings().ok_or("No AI backend configured")?;
-    let context = build_ai_context(&session);
-    let prompt = AiPrompt {
-        context,
-        instruction: instruction.to_string(),
-    };
-
-    let content = ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout)
+    let content = generate_with_fork_or_fallback(&settings, primed, instruction, context, tier)
         .await
         .map_err(|e| {
             log_ai_error(&e);
             e.to_string()
         })?;
 
-    let mut session = ReviewSession::load(session_id)
-        .map_err(|e| format!("Failed to reload session: {e}"))?;
-    set_cached(&mut session, content.clone());
-    let _ = session.save();
+    ai_analyses::upsert(db, session_db_id, analysis_type, None, &content)
+        .await
+        .map_err(|e| format!("DB error saving analysis: {e}"))?;
 
-    Ok((content, false))
-}
-
-#[debug_handler]
-async fn summary_overview(
-    ViewEngine(v): ViewEngine<TeraView>,
-    Path(session_id): Path<String>,
-) -> Result<Response> {
-    let title = "Project Overview";
-    let section_id = "overview";
-
-    match generate_section(
-        &session_id,
-        section_id,
-        ai_cli::overview_instruction(),
-        |s| &s.summary.overview,
-        |s, c| s.summary.overview = Some(c),
-    )
-    .await
-    {
-        Ok((content, _)) => format::render().view(
-            &v,
-            "review/_section_content.html",
-            data!({"title": title, "content": content, "section_id": section_id}),
-        ),
-        Err(error) => format::render().view(
-            &v,
-            "review/_section_error.html",
-            data!({
-                "title": title,
-                "error": error,
-                "section_id": section_id,
-                "session_id": session_id,
-                "retry_url": format!("/review/{session_id}/summary/overview"),
-            }),
-        ),
-    }
-}
-
-#[debug_handler]
-async fn summary_changes(
-    ViewEngine(v): ViewEngine<TeraView>,
-    Path(session_id): Path<String>,
-) -> Result<Response> {
-    let title = "Change Summary";
-    let section_id = "changes";
-
-    match generate_section(
-        &session_id,
-        section_id,
-        ai_cli::changes_instruction(),
-        |s| &s.summary.changes,
-        |s, c| s.summary.changes = Some(c),
-    )
-    .await
-    {
-        Ok((content, _)) => format::render().view(
-            &v,
-            "review/_section_content.html",
-            data!({"title": title, "content": content, "section_id": section_id}),
-        ),
-        Err(error) => format::render().view(
-            &v,
-            "review/_section_error.html",
-            data!({
-                "title": title,
-                "error": error,
-                "section_id": section_id,
-                "session_id": session_id,
-                "retry_url": format!("/review/{session_id}/summary/changes"),
-            }),
-        ),
-    }
+    Ok((markdown::to_html(&content), false))
 }
 
 #[debug_handler]
 async fn summary_approach(
     ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
     Path(session_id): Path<String>,
 ) -> Result<Response> {
     let title = "Implementation Approach";
     let section_id = "approach";
 
+    let (model, session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let context = build_ai_context(&session);
+    let primed = build_primed_session(&session);
+
     match generate_section(
-        &session_id,
-        section_id,
+        &ctx.db,
+        model.id,
+        "approach",
         ai_cli::approach_instruction(),
-        |s| &s.summary.approach,
-        |s, c| s.summary.approach = Some(c),
+        &context,
+        ModelTier::Deep,
+        primed.as_ref(),
     )
     .await
     {
@@ -294,8 +291,6 @@ async fn section_skip(
     Path((session_id, section)): Path<(String, String)>,
 ) -> Result<Response> {
     let title = match section.as_str() {
-        "overview" => "Project Overview",
-        "changes" => "Change Summary",
         "approach" => "Implementation Approach",
         _ => "Unknown Section",
     };
@@ -320,13 +315,19 @@ pub struct ChatForm {
 #[debug_handler]
 async fn summary_chat(
     ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
     Path(session_id): Path<String>,
     Form(form): Form<ChatForm>,
 ) -> Result<Response> {
-    let mut session = ReviewSession::load(&session_id).map_err(|e| {
-        tracing::error!("Failed to load session {session_id}: {e}");
-        Error::NotFound
-    })?;
+    let (model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let session_db_id = model.id;
+
+    let user_msg_model = chat_messages::create(&ctx.db, session_db_id, None, "user", &form.message)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error saving user chat message: {e}");
+            Error::InternalServerError
+        })?;
 
     let user_msg = ChatMessage {
         role: "user".to_string(),
@@ -339,14 +340,20 @@ async fn summary_chat(
     let settings = load_ai_settings();
     let ai_response = if let Some(settings) = settings {
         let context = build_ai_context(&session);
-        let prompt = AiPrompt {
-            context,
-            instruction: format!(
-                "The user asks: {}\n\nRespond helpfully based on the code changes above.",
-                form.message
-            ),
-        };
-        match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout).await {
+        let instruction = format!(
+            "The user asks: {}\n\nRespond helpfully based on the code changes above.",
+            form.message
+        );
+        let primed = build_primed_session(&session);
+        match generate_with_fork_or_fallback(
+            &settings,
+            primed.as_ref(),
+            &instruction,
+            &context,
+            ModelTier::Fast,
+        )
+        .await
+        {
             Ok(response) => response,
             Err(e) => {
                 log_ai_error(&e);
@@ -357,6 +364,14 @@ async fn summary_chat(
         "No AI backend configured. Please set up an AI backend first.".to_string()
     };
 
+    let ai_msg_model =
+        chat_messages::create(&ctx.db, session_db_id, None, "assistant", &ai_response)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error saving AI chat message: {e}");
+                Error::InternalServerError
+            })?;
+
     let ai_msg = ChatMessage {
         role: "assistant".to_string(),
         content: ai_response,
@@ -366,7 +381,10 @@ async fn summary_chat(
     session.chat_messages.push(ai_msg);
     let _ = session.save();
 
-    let last_two: Vec<_> = session.chat_messages[session.chat_messages.len() - 2..].to_vec();
+    let last_two: Vec<serde_json::Value> = vec![
+        chat_msg_to_json(&user_msg_model, None),
+        chat_msg_to_json(&ai_msg_model, None),
+    ];
 
     format::render().view(
         &v,
@@ -378,12 +396,10 @@ async fn summary_chat(
 #[debug_handler]
 async fn guide_start(
     ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
     Path(session_id): Path<String>,
 ) -> Result<Response> {
-    let session = ReviewSession::load(&session_id).map_err(|e| {
-        tracing::error!("Failed to load session {session_id}: {e}");
-        Error::NotFound
-    })?;
+    let (_model, session) = load_session_from_db(&ctx.db, &session_id).await?;
 
     if session.review_plan.is_some() {
         return format::render().redirect(&format!("/review/{session_id}/guide"));
@@ -409,24 +425,31 @@ async fn guide_start(
         instruction: ai_cli::review_plan_instruction().to_string(),
     };
 
-    match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout).await {
+    let model = settings.model_for_tier(ModelTier::Deep);
+    match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout, model).await {
         Ok(raw_response) => {
-            match ai_cli::extract_json_from_response(&raw_response)
-                .and_then(|json| {
-                    serde_json::from_str::<ReviewPlanResponse>(&json)
-                        .map_err(|e| format!("Failed to parse review plan JSON: {e}"))
-                })
-            {
+            match ai_cli::extract_json_from_response(&raw_response).and_then(|json| {
+                serde_json::from_str::<ReviewPlanResponse>(&json)
+                    .map_err(|e| format!("Failed to parse review plan JSON: {e}"))
+            }) {
                 Ok(plan_response) => {
-                    let mut session = ReviewSession::load(&session_id).map_err(|e| {
-                        tracing::error!("Failed to reload session: {e}");
-                        Error::NotFound
-                    })?;
-                    session.review_plan = Some(ReviewPlan {
+                    let plan = ReviewPlan {
                         steps: plan_response.steps,
                         generated_at: chrono_now(),
-                    });
-                    let _ = session.save();
+                    };
+                    let plan_json = serde_json::to_string(&plan).ok();
+
+                    review_sessions::update_review_plan(&ctx.db, &session_id, plan_json)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!("DB error saving review plan: {e}");
+                            Error::InternalServerError
+                        })?;
+
+                    if let Ok(mut file_session) = ReviewSession::load(&session_id) {
+                        file_session.review_plan = Some(plan);
+                        let _ = file_session.save();
+                    }
 
                     format::render().redirect(&format!("/review/{session_id}/guide"))
                 }
@@ -460,14 +483,26 @@ struct ReviewPlanResponse {
 }
 
 #[debug_handler]
-async fn guide_plan_skip(Path(session_id): Path<String>) -> Result<Response> {
-    let mut session = ReviewSession::load(&session_id).map_err(|e| {
-        tracing::error!("Failed to load session {session_id}: {e}");
-        Error::NotFound
-    })?;
+async fn guide_plan_skip(
+    State(ctx): State<AppContext>,
+    Path(session_id): Path<String>,
+) -> Result<Response> {
+    let (_model, session) = load_session_from_db(&ctx.db, &session_id).await?;
 
-    session.review_plan = Some(fallback_review_plan(&session));
-    let _ = session.save();
+    let plan = fallback_review_plan(&session);
+    let plan_json = serde_json::to_string(&plan).ok();
+
+    review_sessions::update_review_plan(&ctx.db, &session_id, plan_json)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error saving fallback review plan: {e}");
+            Error::InternalServerError
+        })?;
+
+    if let Ok(mut file_session) = ReviewSession::load(&session_id) {
+        file_session.review_plan = Some(plan);
+        let _ = file_session.save();
+    }
 
     format::render().redirect(&format!("/review/{session_id}/guide"))
 }
@@ -475,12 +510,10 @@ async fn guide_plan_skip(Path(session_id): Path<String>) -> Result<Response> {
 #[debug_handler]
 async fn guide_page(
     ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
     Path(session_id): Path<String>,
 ) -> Result<Response> {
-    let session = ReviewSession::load(&session_id).map_err(|e| {
-        tracing::error!("Failed to load session {session_id}: {e}");
-        Error::NotFound
-    })?;
+    let (_model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
 
     let plan = match &session.review_plan {
         Some(plan) => plan.clone(),
@@ -489,7 +522,6 @@ async fn guide_page(
         }
     };
 
-    let mut session = session;
     session.ensure_validated_steps_size();
 
     let steps_data: Vec<serde_json::Value> = plan
@@ -526,6 +558,144 @@ async fn guide_page(
     )
 }
 
+const LOADING_HINTS: &[&str] = &[
+    "AI is reading through your changes...",
+    "Analyzing code patterns and structure...",
+    "Building a mental model of your changes...",
+    "Grouping related changes into review steps...",
+    "Almost there — generating explanations...",
+    "Understanding the impact of each change...",
+    "Preparing a guided review experience...",
+];
+
+#[debug_handler]
+async fn loading_page(
+    ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
+    Path(session_id): Path<String>,
+) -> Result<Response> {
+    let (model, session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let status = background_analysis::check_analysis_status(&ctx.db, model.id, &session_id).await;
+
+    if status.summary_ready {
+        return format::render().redirect(&format!("/review/{session_id}/summary"));
+    }
+
+    format::render().view(
+        &v,
+        "review/loading.html",
+        data!({
+            "session_id": session.id,
+            "branch": session.branch,
+            "default_branch": session.default_branch,
+            "changed_files_count": session.changed_files.len(),
+            "lines_added": session.metrics.lines_added,
+            "lines_removed": session.metrics.lines_removed,
+            "commits": session.metrics.commits_on_branch,
+            "approach_ready": status.approach_ready,
+            "plan_ready": status.plan_ready,
+            "step_count": status.step_count,
+            "steps_explained": status.steps_explained,
+            "has_failures": status.has_failures,
+            "failure_message": status.failure_message,
+            "hint": pick_hint(),
+        }),
+    )
+}
+
+#[debug_handler]
+async fn analysis_status(
+    ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
+    Path(session_id): Path<String>,
+) -> Result<Response> {
+    let (model, _session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let status = background_analysis::check_analysis_status(&ctx.db, model.id, &session_id).await;
+
+    if status.summary_ready {
+        return Ok(axum::response::Response::builder()
+            .header("HX-Redirect", format!("/review/{session_id}/summary"))
+            .body(axum::body::Body::empty())
+            .unwrap()
+            .into_response());
+    }
+
+    format::render().view(
+        &v,
+        "review/_loading_status.html",
+        data!({
+            "session_id": session_id,
+            "approach_ready": status.approach_ready,
+            "plan_ready": status.plan_ready,
+            "step_count": status.step_count,
+            "steps_explained": status.steps_explained,
+            "has_failures": status.has_failures,
+            "failure_message": status.failure_message,
+            "hint": pick_hint(),
+        }),
+    )
+}
+
+#[debug_handler]
+async fn plan_status(
+    ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
+    Path(session_id): Path<String>,
+) -> Result<Response> {
+    let (model, _session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let status = background_analysis::check_analysis_status(&ctx.db, model.id, &session_id).await;
+
+    format::render().view(
+        &v,
+        "review/_plan_status.html",
+        data!({
+            "session_id": session_id,
+            "plan_ready": status.plan_ready,
+            "step_count": status.step_count,
+            "has_failures": status.has_failures,
+            "failure_message": status.failure_message,
+        }),
+    )
+}
+
+#[debug_handler]
+async fn bg_hint(
+    ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
+    Path(session_id): Path<String>,
+) -> Result<Response> {
+    let (model, _session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let status = background_analysis::check_analysis_status(&ctx.db, model.id, &session_id).await;
+
+    let all_done = status.plan_ready
+        && status
+            .step_count
+            .map(|c| status.steps_explained >= c)
+            .unwrap_or(true);
+
+    format::render().view(
+        &v,
+        "review/_bg_hint.html",
+        data!({
+            "session_id": session_id,
+            "all_done": all_done,
+            "step_count": status.step_count,
+            "steps_explained": status.steps_explained,
+            "has_failures": status.has_failures,
+            "failure_message": status.failure_message,
+        }),
+    )
+}
+
+fn pick_hint() -> &'static str {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before UNIX epoch")
+        .as_millis();
+    let idx = (millis / 2000) as usize % LOADING_HINTS.len();
+    LOADING_HINTS[idx]
+}
+
 fn chrono_now() -> String {
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -542,12 +712,11 @@ fn chrono_now() -> String {
 #[debug_handler]
 async fn step_page(
     ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
     Path((session_id, step_number)): Path<(String, usize)>,
 ) -> Result<Response> {
-    let session = ReviewSession::load(&session_id).map_err(|e| {
-        tracing::error!("Failed to load session {session_id}: {e}");
-        Error::NotFound
-    })?;
+    let (model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let session_db_id = model.id;
 
     let plan = match &session.review_plan {
         Some(plan) => plan.clone(),
@@ -561,7 +730,6 @@ async fn step_page(
         return Err(Error::NotFound);
     }
 
-    let mut session = session;
     session.ensure_validated_steps_size();
 
     let step = &plan.steps[step_number - 1];
@@ -603,18 +771,16 @@ async fn step_page(
         None
     };
 
-    let chat_messages: Vec<serde_json::Value> = session
-        .chat_messages
+    let db_messages = chat_messages::find_by_session(&ctx.db, session_db_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error loading chat messages: {e}");
+            Error::InternalServerError
+        })?;
+
+    let chat_messages_json: Vec<serde_json::Value> = db_messages
         .iter()
-        .map(|msg| {
-            serde_json::json!({
-                "role": msg.role,
-                "content": msg.content,
-                "timestamp": msg.timestamp,
-                "step_number": msg.step_number,
-                "is_current_step": msg.step_number == Some(step_number),
-            })
-        })
+        .map(|msg| chat_msg_to_json(msg, Some(step_number)))
         .collect();
 
     format::render().view(
@@ -633,7 +799,7 @@ async fn step_page(
             "steps": steps_data,
             "has_previous": has_previous,
             "prev_step_title": prev_step_title,
-            "chat_messages": chat_messages,
+            "chat_messages": chat_messages_json,
             "current_step_validated": current_step_validated,
         }),
     )
@@ -642,12 +808,11 @@ async fn step_page(
 #[debug_handler]
 async fn step_explanation(
     ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
     Path((session_id, step_number)): Path<(String, usize)>,
 ) -> Result<Response> {
-    let session = ReviewSession::load(&session_id).map_err(|e| {
-        tracing::error!("Failed to load session {session_id}: {e}");
-        Error::NotFound
-    })?;
+    let (model, session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let session_db_id = model.id;
 
     let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
     if step_number < 1 || step_number > plan.steps.len() {
@@ -657,11 +822,24 @@ async fn step_explanation(
     let idx = step_number - 1;
     let step = &plan.steps[idx];
 
-    if let Some(ref cached) = step.ai_data.explanation {
+    let cached = ai_analyses::find_cached(
+        &ctx.db,
+        session_db_id,
+        "step_explanation",
+        Some(step_number as i32),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error checking step explanation cache: {e}");
+        Error::InternalServerError
+    })?;
+
+    if let Some(cached_content) = cached {
+        let html_content = markdown::to_html(&cached_content);
         return format::render().view(
             &v,
             "review/_section_content.html",
-            data!({"title": "Step Explanation", "content": cached, "section_id": "step-explanation"}),
+            data!({"title": "Step Explanation", "content": html_content, "section_id": "step-explanation"}),
         );
     }
 
@@ -691,26 +869,46 @@ async fn step_explanation(
     let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
 
     let context = build_ai_context(&session);
-    let prompt = AiPrompt {
-        context,
-        instruction: ai_cli::step_explanation_instruction(&step.title, &step_diff),
-    };
+    let instruction = ai_cli::step_explanation_instruction(&step.title, &step_diff);
+    let primed = build_primed_session(&session);
 
-    match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout).await {
+    match generate_with_fork_or_fallback(
+        &settings,
+        primed.as_ref(),
+        &instruction,
+        &context,
+        ModelTier::Fast,
+    )
+    .await
+    {
         Ok(content) => {
-            let mut session = ReviewSession::load(&session_id).map_err(|e| {
-                tracing::error!("Failed to reload session: {e}");
-                Error::NotFound
+            ai_analyses::upsert(
+                &ctx.db,
+                session_db_id,
+                "step_explanation",
+                Some(step_number as i32),
+                &content,
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error saving step explanation: {e}");
+                Error::InternalServerError
             })?;
-            session.review_plan.as_mut().unwrap().steps[idx]
-                .ai_data
-                .explanation = Some(content.clone());
-            let _ = session.save();
 
+            if let Ok(mut file_session) = ReviewSession::load(&session_id) {
+                if let Some(ref mut plan) = file_session.review_plan {
+                    if let Some(step) = plan.steps.get_mut(idx) {
+                        step.ai_data.explanation = Some(content.clone());
+                    }
+                }
+                let _ = file_session.save();
+            }
+
+            let html_content = markdown::to_html(&content);
             format::render().view(
                 &v,
                 "review/_section_content.html",
-                data!({"title": "Step Explanation", "content": content, "section_id": "step-explanation"}),
+                data!({"title": "Step Explanation", "content": html_content, "section_id": "step-explanation"}),
             )
         }
         Err(e) => {
@@ -734,12 +932,11 @@ async fn step_explanation(
 #[debug_handler]
 async fn step_relation(
     ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
     Path((session_id, step_number)): Path<(String, usize)>,
 ) -> Result<Response> {
-    let session = ReviewSession::load(&session_id).map_err(|e| {
-        tracing::error!("Failed to load session {session_id}: {e}");
-        Error::NotFound
-    })?;
+    let (model, session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let session_db_id = model.id;
 
     let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
     if step_number < 2 || step_number > plan.steps.len() {
@@ -749,11 +946,24 @@ async fn step_relation(
     let idx = step_number - 1;
     let step = &plan.steps[idx];
 
-    if let Some(ref cached) = step.ai_data.relation_to_previous {
+    let cached = ai_analyses::find_cached(
+        &ctx.db,
+        session_db_id,
+        "step_relation",
+        Some(step_number as i32),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error checking step relation cache: {e}");
+        Error::InternalServerError
+    })?;
+
+    if let Some(cached_content) = cached {
+        let html_content = markdown::to_html(&cached_content);
         return format::render().view(
             &v,
             "review/_section_content.html",
-            data!({"title": "Relation to Previous Step", "content": cached, "section_id": "step-relation"}),
+            data!({"title": "Relation to Previous Step", "content": html_content, "section_id": "step-relation"}),
         );
     }
 
@@ -784,26 +994,46 @@ async fn step_relation(
     let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
 
     let context = build_ai_context(&session);
-    let prompt = AiPrompt {
-        context,
-        instruction: ai_cli::step_relation_instruction(prev_title, &step.title, &step_diff),
-    };
+    let instruction = ai_cli::step_relation_instruction(prev_title, &step.title, &step_diff);
+    let primed = build_primed_session(&session);
 
-    match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout).await {
+    match generate_with_fork_or_fallback(
+        &settings,
+        primed.as_ref(),
+        &instruction,
+        &context,
+        ModelTier::Fast,
+    )
+    .await
+    {
         Ok(content) => {
-            let mut session = ReviewSession::load(&session_id).map_err(|e| {
-                tracing::error!("Failed to reload session: {e}");
-                Error::NotFound
+            ai_analyses::upsert(
+                &ctx.db,
+                session_db_id,
+                "step_relation",
+                Some(step_number as i32),
+                &content,
+            )
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error saving step relation: {e}");
+                Error::InternalServerError
             })?;
-            session.review_plan.as_mut().unwrap().steps[idx]
-                .ai_data
-                .relation_to_previous = Some(content.clone());
-            let _ = session.save();
 
+            if let Ok(mut file_session) = ReviewSession::load(&session_id) {
+                if let Some(ref mut plan) = file_session.review_plan {
+                    if let Some(step) = plan.steps.get_mut(idx) {
+                        step.ai_data.relation_to_previous = Some(content.clone());
+                    }
+                }
+                let _ = file_session.save();
+            }
+
+            let html_content = markdown::to_html(&content);
             format::render().view(
                 &v,
                 "review/_section_content.html",
-                data!({"title": "Relation to Previous Step", "content": content, "section_id": "step-relation"}),
+                data!({"title": "Relation to Previous Step", "content": html_content, "section_id": "step-relation"}),
             )
         }
         Err(e) => {
@@ -825,128 +1055,14 @@ async fn step_relation(
 }
 
 #[debug_handler]
-async fn step_symbols(
-    ViewEngine(v): ViewEngine<TeraView>,
-    Path((session_id, step_number)): Path<(String, usize)>,
-) -> Result<Response> {
-    let session = ReviewSession::load(&session_id).map_err(|e| {
-        tracing::error!("Failed to load session {session_id}: {e}");
-        Error::NotFound
-    })?;
-
-    let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
-    if step_number < 1 || step_number > plan.steps.len() {
-        return Err(Error::NotFound);
-    }
-
-    let idx = step_number - 1;
-    let step = &plan.steps[idx];
-
-    if let Some(ref cached) = step.ai_data.symbols {
-        return format::render().view(
-            &v,
-            "review/_step_symbols.html",
-            data!({"symbols": cached}),
-        );
-    }
-
-    let settings = match load_ai_settings() {
-        Some(s) => s,
-        None => {
-            return format::render().view(
-                &v,
-                "review/_section_error.html",
-                data!({
-                    "title": "Changed Symbols",
-                    "error": "No AI backend configured",
-                    "section_id": "step-symbols",
-                    "session_id": session_id,
-                    "retry_url": format!("/review/{session_id}/guide/step/{step_number}/symbols"),
-                    "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/symbols"),
-                }),
-            );
-        }
-    };
-
-    let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
-        .file_refs
-        .iter()
-        .map(|f| (f.path.clone(), f.diff_lines))
-        .collect();
-    let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
-
-    let context = build_ai_context(&session);
-    let prompt = AiPrompt {
-        context,
-        instruction: ai_cli::step_symbols_instruction(&step_diff),
-    };
-
-    match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout).await {
-        Ok(raw) => {
-            match ai_cli::extract_json_from_response(&raw)
-                .and_then(|json| {
-                    serde_json::from_str::<Vec<SymbolInfo>>(&json)
-                        .map_err(|e| format!("Failed to parse symbols JSON: {e}"))
-                })
-            {
-                Ok(symbols) => {
-                    let mut session = ReviewSession::load(&session_id).map_err(|e| {
-                        tracing::error!("Failed to reload session: {e}");
-                        Error::NotFound
-                    })?;
-                    session.review_plan.as_mut().unwrap().steps[idx]
-                        .ai_data
-                        .symbols = Some(symbols.clone());
-                    let _ = session.save();
-
-                    format::render().view(
-                        &v,
-                        "review/_step_symbols.html",
-                        data!({"symbols": symbols}),
-                    )
-                }
-                Err(error) => format::render().view(
-                    &v,
-                    "review/_section_error.html",
-                    data!({
-                        "title": "Changed Symbols",
-                        "error": error,
-                        "section_id": "step-symbols",
-                        "session_id": session_id,
-                        "retry_url": format!("/review/{session_id}/guide/step/{step_number}/symbols"),
-                        "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/symbols"),
-                    }),
-                ),
-            }
-        }
-        Err(e) => {
-            log_ai_error(&e);
-            format::render().view(
-                &v,
-                "review/_section_error.html",
-                data!({
-                    "title": "Changed Symbols",
-                    "error": e.to_string(),
-                    "section_id": "step-symbols",
-                    "session_id": session_id,
-                    "retry_url": format!("/review/{session_id}/guide/step/{step_number}/symbols"),
-                    "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/symbols"),
-                }),
-            )
-        }
-    }
-}
-
-#[debug_handler]
 async fn step_chat(
     ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
     Path((session_id, step_number)): Path<(String, usize)>,
     Form(form): Form<ChatForm>,
 ) -> Result<Response> {
-    let mut session = ReviewSession::load(&session_id).map_err(|e| {
-        tracing::error!("Failed to load session {session_id}: {e}");
-        Error::NotFound
-    })?;
+    let (model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let session_db_id = model.id;
 
     let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
     if step_number < 1 || step_number > plan.steps.len() {
@@ -956,11 +1072,19 @@ async fn step_chat(
     let idx = step_number - 1;
     let step = &plan.steps[idx];
     let step_title = step.title.clone();
-    let explanation = step
-        .ai_data
-        .explanation
-        .clone()
-        .unwrap_or_default();
+
+    let explanation = ai_analyses::find_cached(
+        &ctx.db,
+        session_db_id,
+        "step_explanation",
+        Some(step_number as i32),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error loading step explanation for chat context: {e}");
+        Error::InternalServerError
+    })?
+    .unwrap_or_default();
 
     let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
         .file_refs
@@ -968,6 +1092,19 @@ async fn step_chat(
         .map(|f| (f.path.clone(), f.diff_lines))
         .collect();
     let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
+
+    let user_msg_model = chat_messages::create(
+        &ctx.db,
+        session_db_id,
+        Some(step_number as i32),
+        "user",
+        &form.message,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error saving user step chat message: {e}");
+        Error::InternalServerError
+    })?;
 
     let user_msg = ChatMessage {
         role: "user".to_string(),
@@ -982,11 +1119,16 @@ async fn step_chat(
         let context = build_ai_context(&session);
         let instruction =
             ai_cli::step_chat_instruction(&step_title, &step_diff, &explanation, &form.message);
-        let prompt = AiPrompt {
-            context,
-            instruction,
-        };
-        match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout).await {
+        let primed = build_primed_session(&session);
+        match generate_with_fork_or_fallback(
+            &settings,
+            primed.as_ref(),
+            &instruction,
+            &context,
+            ModelTier::Fast,
+        )
+        .await
+        {
             Ok(response) => response,
             Err(e) => {
                 log_ai_error(&e);
@@ -997,6 +1139,19 @@ async fn step_chat(
         "No AI backend configured. Please set up an AI backend first.".to_string()
     };
 
+    let ai_msg_model = chat_messages::create(
+        &ctx.db,
+        session_db_id,
+        Some(step_number as i32),
+        "assistant",
+        &ai_response,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error saving AI step chat message: {e}");
+        Error::InternalServerError
+    })?;
+
     let ai_msg = ChatMessage {
         role: "assistant".to_string(),
         content: ai_response,
@@ -1006,7 +1161,10 @@ async fn step_chat(
     session.chat_messages.push(ai_msg);
     let _ = session.save();
 
-    let last_two: Vec<_> = session.chat_messages[session.chat_messages.len() - 2..].to_vec();
+    let last_two: Vec<serde_json::Value> = vec![
+        chat_msg_to_json(&user_msg_model, Some(step_number)),
+        chat_msg_to_json(&ai_msg_model, Some(step_number)),
+    ];
 
     format::render().view(
         &v,
@@ -1017,12 +1175,10 @@ async fn step_chat(
 
 #[debug_handler]
 async fn step_validate(
+    State(ctx): State<AppContext>,
     Path((session_id, step_number)): Path<(String, usize)>,
 ) -> Result<Response> {
-    let mut session = ReviewSession::load(&session_id).map_err(|e| {
-        tracing::error!("Failed to load session {session_id}: {e}");
-        Error::NotFound
-    })?;
+    let (_model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
 
     let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
     let total_steps = plan.steps.len();
@@ -1032,6 +1188,14 @@ async fn step_validate(
 
     session.ensure_validated_steps_size();
     session.validated_steps[step_number - 1] = true;
+
+    review_sessions::update_validated_steps(&ctx.db, &session_id, &session.validated_steps)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error saving validated steps: {e}");
+            Error::InternalServerError
+        })?;
+
     let _ = session.save();
 
     let all_validated = session.validated_steps.iter().all(|&v| v);
@@ -1039,7 +1203,10 @@ async fn step_validate(
     if all_validated {
         format::render().redirect(&format!("/review/{session_id}/summary"))
     } else if step_number < total_steps {
-        format::render().redirect(&format!("/review/{session_id}/guide/step/{}", step_number + 1))
+        format::render().redirect(&format!(
+            "/review/{session_id}/guide/step/{}",
+            step_number + 1
+        ))
     } else {
         format::render().redirect(&format!("/review/{session_id}/guide"))
     }
@@ -1053,14 +1220,12 @@ async fn step_section_skip(
     let title = match section.as_str() {
         "explanation" => "Step Explanation",
         "relation" => "Relation to Previous Step",
-        "symbols" => "Changed Symbols",
         _ => "Unknown Section",
     };
 
     let section_id = match section.as_str() {
         "explanation" => "step-explanation",
         "relation" => "step-relation",
-        "symbols" => "step-symbols",
         _ => &section,
     };
 
@@ -1076,24 +1241,56 @@ async fn step_section_skip(
     )
 }
 
+#[debug_handler]
+async fn retry_analysis(
+    State(ctx): State<AppContext>,
+    Path(session_id): Path<String>,
+) -> Result<Response> {
+    let (model, session) = load_session_from_db(&ctx.db, &session_id).await?;
+    background_analysis::spawn_all_analyses(ctx.db.clone(), model.id, session);
+
+    Ok(axum::response::Response::builder()
+        .header("HX-Redirect", format!("/review/{session_id}/loading"))
+        .body(axum::body::Body::empty())
+        .unwrap()
+        .into_response())
+}
+
 pub fn page_routes() -> Routes {
     Routes::new()
         .prefix("/review")
+        .add("/{session_id}/loading", get(loading_page))
+        .add("/{session_id}/status", get(analysis_status))
+        .add("/{session_id}/plan-status", get(plan_status))
+        .add("/{session_id}/bg-hint", get(bg_hint))
+        .add("/{session_id}/retry", post(retry_analysis))
         .add("/{session_id}/summary", get(summary_page))
-        .add("/{session_id}/summary/overview", get(summary_overview))
-        .add("/{session_id}/summary/changes", get(summary_changes))
         .add("/{session_id}/summary/approach", get(summary_approach))
         .add("/{session_id}/summary/skip/{section}", get(section_skip))
         .add("/{session_id}/summary/chat", post(summary_chat))
         .add("/{session_id}/guide/start", post(guide_start))
         .add("/{session_id}/guide/plan/skip", post(guide_plan_skip))
         .add("/{session_id}/guide/step/{step_number}", get(step_page))
-        .add("/{session_id}/guide/step/{step_number}/explanation", get(step_explanation))
-        .add("/{session_id}/guide/step/{step_number}/relation", get(step_relation))
-        .add("/{session_id}/guide/step/{step_number}/symbols", get(step_symbols))
-        .add("/{session_id}/guide/step/{step_number}/chat", post(step_chat))
-        .add("/{session_id}/guide/step/{step_number}/validate", post(step_validate))
-        .add("/{session_id}/guide/step/{step_number}/skip/{section}", get(step_section_skip))
+        .add(
+            "/{session_id}/guide/step/{step_number}/explanation",
+            get(step_explanation),
+        )
+        .add(
+            "/{session_id}/guide/step/{step_number}/relation",
+            get(step_relation),
+        )
+        .add(
+            "/{session_id}/guide/step/{step_number}/chat",
+            post(step_chat),
+        )
+        .add(
+            "/{session_id}/guide/step/{step_number}/validate",
+            post(step_validate),
+        )
+        .add(
+            "/{session_id}/guide/step/{step_number}/skip/{section}",
+            get(step_section_skip),
+        )
         .add("/{session_id}/guide", get(guide_page))
 }
 

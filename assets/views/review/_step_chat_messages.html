@@ -1,7 +1,7 @@
 {% for msg in messages %}
 <div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %} {% if msg.is_current_step is defined and msg.is_current_step %}{% else %}opacity-50{% endif %}">
     <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
-        {{ msg.content }}
+        {{ msg.content | safe }}
     </div>
     <div class="chat-footer text-xs text-base-content/50">
         {% if msg.step_number %}Step {{ msg.step_number }} &middot; {% endif %}{{ msg.timestamp }}

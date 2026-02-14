@@ -2,7 +2,7 @@
     <div class="card-body">
         <h2 class="card-title text-lg">{{ title }}</h2>
         <div class="prose prose-sm max-w-none mt-2">
-            {{ content }}
+            {{ content | safe }}
         </div>
     </div>
 </div>

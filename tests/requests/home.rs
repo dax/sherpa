@@ -25,8 +25,14 @@ async fn can_get_index_page() {
         let body = res.text();
         assert!(body.contains("Sherpa"), "page should contain app name");
         assert!(body.contains("htmx.org"), "page should include HTMX script");
-        assert!(body.contains("flyonui"), "page should include FlyonUI assets");
-        assert!(body.contains("diff2html"), "page should include diff2html assets");
+        assert!(
+            body.contains("flyonui"),
+            "page should include FlyonUI assets"
+        );
+        assert!(
+            body.contains("diff2html"),
+            "page should include diff2html assets"
+        );
         assert!(
             body.contains("/cli/setup") || body.contains("AI Backend"),
             "page should show CLI setup link or backend status"
@@ -44,8 +50,14 @@ async fn can_get_greeting_fragment() {
         assert_eq!(res.status_code(), 200);
 
         let body = res.text();
-        assert!(body.contains("Hello from HTMX"), "fragment should contain greeting text");
-        assert!(!body.contains("<!DOCTYPE"), "fragment should NOT be a full HTML document");
+        assert!(
+            body.contains("Hello from HTMX"),
+            "fragment should contain greeting text"
+        );
+        assert!(
+            !body.contains("<!DOCTYPE"),
+            "fragment should NOT be a full HTML document"
+        );
     })
     .await;
 }

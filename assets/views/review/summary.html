@@ -25,20 +25,6 @@
     {% endif %}
 
     <div class="space-y-4">
-        <div id="overview-section"
-             hx-get="/review/{{ session_id }}/summary/overview"
-             hx-trigger="load"
-             hx-swap="outerHTML">
-            {% include "review/_section_loading.html" %}
-        </div>
-
-        <div id="changes-section"
-             hx-get="/review/{{ session_id }}/summary/changes"
-             hx-trigger="load"
-             hx-swap="outerHTML">
-            {% include "review/_section_loading.html" %}
-        </div>
-
         <div id="approach-section"
              hx-get="/review/{{ session_id }}/summary/approach"
              hx-trigger="load"
@@ -98,7 +84,7 @@
                             <div>
                                 <h4 class="text-sm font-semibold text-base-content/70 mb-1">AI Explanation</h4>
                                 <div class="prose prose-sm max-w-none text-base-content/80">
-                                    {{ step.explanation }}
+                                    {{ step.explanation | safe }}
                                 </div>
                             </div>
                             {% endif %}
@@ -110,7 +96,7 @@
                                     {% for msg in step.chat_messages %}
                                     <div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %}">
                                         <div class="chat-bubble chat-bubble-sm {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
-                                            {{ msg.content }}
+                                            {{ msg.content | safe }}
                                         </div>
                                         <div class="chat-footer text-xs text-base-content/50">{{ msg.timestamp }}</div>
                                     </div>
@@ -135,7 +121,7 @@
                 <div class="chat {{ msg.role }}">
                     <div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %}">
                         <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
-                            {{ msg.content }}
+                            {{ msg.content | safe }}
                         </div>
                         <div class="chat-footer text-xs text-base-content/50">{{ msg.timestamp }}</div>
                     </div>
@@ -168,16 +154,21 @@
         </a>
     </div>
     {% else %}
-    <div id="start-review-area" class="mt-6">
-        <button hx-post="/review/{{ session_id }}/guide/start"
-                hx-target="#start-review-area"
-                hx-swap="outerHTML"
-                hx-indicator="#start-review-spinner"
-                class="btn btn-primary w-full btn-lg">
-            Start Review
+    <div id="start-review-area"
+         hx-get="/review/{{ session_id }}/plan-status"
+         hx-trigger="load"
+         hx-swap="outerHTML">
+        <button class="btn btn-primary w-full btn-lg" disabled>
+            <span class="loading loading-spinner loading-sm"></span>
+            Preparing review plan...
         </button>
-        <span id="start-review-spinner" class="loading loading-spinner loading-lg htmx-indicator mx-auto mt-2 block"></span>
     </div>
     {% endif %}
+
+    <div id="bg-status"
+         hx-get="/review/{{ session_id }}/bg-hint"
+         hx-trigger="load"
+         hx-swap="outerHTML">
+    </div>
 </div>
 {% endblock %}

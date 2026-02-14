@@ -1,0 +1,38 @@
+{% if plan_ready %}
+<div id="start-review-area" class="mt-6">
+    <a href="/review/{{ session_id }}/guide" class="btn btn-primary w-full btn-lg">
+        Start Review
+        {% if step_count %}
+        <span class="badge badge-ghost ml-2">{{ step_count }} steps</span>
+        {% endif %}
+    </a>
+</div>
+{% elif has_failures %}
+<div id="start-review-area" class="mt-6">
+    <div class="alert alert-error mb-3">
+        <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+        </svg>
+        <div>
+            <p class="font-semibold">Review plan generation failed</p>
+            {% if failure_message %}<p class="text-sm">{{ failure_message }}</p>{% endif %}
+        </div>
+    </div>
+    <button class="btn btn-primary w-full btn-lg"
+            hx-post="/review/{{ session_id }}/retry"
+            hx-target="#start-review-area"
+            hx-swap="outerHTML">
+        Retry Analysis
+    </button>
+</div>
+{% else %}
+<div id="start-review-area" class="mt-6"
+     hx-get="/review/{{ session_id }}/plan-status"
+     hx-trigger="every 3s"
+     hx-swap="outerHTML">
+    <button class="btn btn-primary w-full btn-lg" disabled>
+        <span class="loading loading-spinner loading-sm"></span>
+        Preparing review plan...
+    </button>
+</div>
+{% endif %}

@@ -1,0 +1,72 @@
+<div id="analysis-status"
+     hx-get="/review/{{ session_id }}/status"
+     hx-trigger="{% if has_failures %}none{% else %}every 2s{% endif %}"
+     hx-swap="outerHTML">
+    <div class="space-y-3 text-left max-w-xs mx-auto mt-4">
+        <div class="flex items-center gap-3">
+            {% if approach_ready %}
+            <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5 text-success" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+            </svg>
+            {% else %}
+            <span class="loading loading-spinner loading-sm text-primary shrink-0"></span>
+            {% endif %}
+            <span class="{% if approach_ready %}text-success{% else %}text-base-content/70{% endif %}">Implementation Approach</span>
+        </div>
+
+        <div class="divider my-1"></div>
+
+        <div class="flex items-center gap-3">
+            {% if plan_ready %}
+            <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5 text-success" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+            </svg>
+            {% else %}
+            <span class="loading loading-spinner loading-sm text-primary shrink-0"></span>
+            {% endif %}
+            <span class="{% if plan_ready %}text-success{% else %}text-base-content/70{% endif %}">
+                Review Plan
+                {% if plan_ready and step_count %}
+                <span class="text-xs text-base-content/50">({{ step_count }} steps)</span>
+                {% endif %}
+            </span>
+        </div>
+
+        {% if plan_ready and step_count %}
+        <div class="flex items-center gap-3 pl-2">
+            {% if steps_explained == step_count %}
+            <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-4 text-success" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+            </svg>
+            {% else %}
+            <span class="loading loading-spinner loading-xs text-primary shrink-0"></span>
+            {% endif %}
+            <span class="text-sm {% if steps_explained == step_count %}text-success{% else %}text-base-content/50{% endif %}">
+                Step explanations ({{ steps_explained }}/{{ step_count }})
+            </span>
+        </div>
+        {% endif %}
+    </div>
+
+    {% if has_failures %}
+    <div class="alert alert-error mt-4">
+        <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+        </svg>
+        <div>
+            <p class="font-semibold">Analysis failed</p>
+            {% if failure_message %}<p class="text-sm">{{ failure_message }}</p>{% endif %}
+        </div>
+        <button class="btn btn-sm btn-ghost"
+                hx-post="/review/{{ session_id }}/retry"
+                hx-swap="outerHTML"
+                hx-target="#analysis-status">
+            Retry
+        </button>
+    </div>
+    {% else %}
+    <p class="text-base-content/50 text-sm mt-6 italic">
+        {{ hint }}
+    </p>
+    {% endif %}
+</div>

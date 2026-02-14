@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Sherpa — Analyzing...{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-center min-h-screen">
+    <div class="card bg-base-100 shadow-xl max-w-lg w-full">
+        <div class="card-body text-center">
+            <h1 class="text-2xl font-bold mb-2">Analyzing Repository</h1>
+            <p class="text-base-content/70 mb-6">
+                Branch <span class="font-mono font-semibold">{{ branch }}</span>
+                against <span class="font-mono font-semibold">{{ default_branch }}</span>
+            </p>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <div class="stat bg-base-200 rounded-lg p-3">
+                    <div class="stat-title text-xs">Files</div>
+                    <div class="stat-value text-xl">{{ changed_files_count }}</div>
+                </div>
+                <div class="stat bg-base-200 rounded-lg p-3">
+                    <div class="stat-title text-xs">Added</div>
+                    <div class="stat-value text-xl text-success">+{{ lines_added }}</div>
+                </div>
+                <div class="stat bg-base-200 rounded-lg p-3">
+                    <div class="stat-title text-xs">Removed</div>
+                    <div class="stat-value text-xl text-error">-{{ lines_removed }}</div>
+                </div>
+                <div class="stat bg-base-200 rounded-lg p-3">
+                    <div class="stat-title text-xs">Commits</div>
+                    <div class="stat-value text-xl">{{ commits }}</div>
+                </div>
+            </div>
+
+            <div id="analysis-status"
+                 hx-get="/review/{{ session_id }}/status"
+                 hx-trigger="every 2s"
+                 hx-swap="outerHTML">
+                {% include "review/_loading_status.html" %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

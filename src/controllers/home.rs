@@ -36,7 +36,5 @@ pub fn page_routes() -> Routes {
 }
 
 pub fn api_routes() -> Routes {
-    Routes::new()
-        .prefix("/api")
-        .add("/", get(api_home))
+    Routes::new().prefix("/api").add("/", get(api_home))
 }

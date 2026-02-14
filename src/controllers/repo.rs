@@ -1,9 +1,11 @@
 use axum::extract::Path as AxumPath;
+use axum::response::IntoResponse;
 use axum::Form;
 use loco_rs::prelude::*;
 use serde::Deserialize;
 
-use crate::services::{git_analysis, review_session::ReviewSession};
+use crate::models::review_sessions as rs_model;
+use crate::services::{background_analysis, git_analysis, review_session::ReviewSession};
 
 #[derive(Deserialize)]
 pub struct RepoAnalyzeForm {
@@ -24,6 +26,7 @@ async fn analyze_page(ViewEngine(v): ViewEngine<TeraView>) -> Result<Response> {
 #[debug_handler]
 async fn analyze_submit(
     ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
     Form(form): Form<RepoAnalyzeForm>,
 ) -> Result<Response> {
     let repo_path = form.path.clone();
@@ -50,7 +53,14 @@ async fn analyze_submit(
         }
     };
 
-    if let Some(existing) = ReviewSession::find_existing(&analysis.repo_path, &analysis.current_branch) {
+    if let Ok(Some(existing_model)) = rs_model::Model::find_by_repo_and_branch(
+        &ctx.db,
+        &analysis.repo_path,
+        &analysis.current_branch,
+    )
+    .await
+    {
+        let existing = existing_model.to_review_session();
         let merge_base_changed = existing.merge_base != analysis.merge_base;
 
         let validated_count = existing.validated_steps.iter().filter(|&&v| v).count();
@@ -78,39 +88,45 @@ async fn analyze_submit(
     }
 
     let session = ReviewSession::new(analysis);
-    if let Err(e) = session.save() {
-        return format::render().view(
-            &v,
-            "repo/_error.html",
-            data!({"message": format!("Failed to save session: {e}")}),
-        );
-    }
 
-    let merge_base_short = if session.merge_base.len() > 8 {
-        &session.merge_base[..8]
-    } else {
-        &session.merge_base
+    let model = match rs_model::find_or_create(&ctx.db, &session).await {
+        Ok(m) => m,
+        Err(e) => {
+            return format::render().view(
+                &v,
+                "repo/_error.html",
+                data!({"message": format!("Failed to save session: {e}")}),
+            );
+        }
     };
+    let _ = session.save();
 
-    format::render().view(
-        &v,
-        "repo/_success.html",
-        data!({
-            "session_id": session.id,
-            "branch": session.branch,
-            "default_branch": session.default_branch,
-            "changed_files_count": session.changed_files.len(),
-            "merge_base": merge_base_short,
-        }),
-    )
+    background_analysis::spawn_all_analyses(ctx.db.clone(), model.id, session.clone());
+
+    Ok(axum::response::Response::builder()
+        .header("HX-Redirect", format!("/review/{}/loading", session.id))
+        .body(axum::body::Body::empty())
+        .unwrap()
+        .into_response())
 }
 
 #[debug_handler]
-async fn resume_submit(AxumPath(session_id): AxumPath<String>) -> Result<Response> {
-    let session = ReviewSession::load(&session_id).map_err(|e| {
-        tracing::error!("Failed to load session for resume {session_id}: {e}");
-        Error::NotFound
-    })?;
+async fn resume_submit(
+    State(ctx): State<AppContext>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Result<Response> {
+    let model = rs_model::Model::find_by_session_key(&ctx.db, &session_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error loading session for resume {session_id}: {e}");
+            Error::InternalServerError
+        })?
+        .ok_or_else(|| {
+            tracing::error!("Session not found for resume: {session_id}");
+            Error::NotFound
+        })?;
+
+    let session = model.to_review_session();
 
     if let Some(step) = session.first_unvalidated_step() {
         format::render().redirect(&format!("/review/{session_id}/guide/step/{step}"))
@@ -124,8 +140,11 @@ async fn resume_submit(AxumPath(session_id): AxumPath<String>) -> Result<Respons
 #[debug_handler]
 async fn fresh_submit(
     ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
     Form(form): Form<FreshForm>,
 ) -> Result<Response> {
+    let _ =
+        rs_model::Model::delete_by_repo_and_branch(&ctx.db, &form.repo_path, &form.branch).await;
     let _ = ReviewSession::delete_repo_session(&form.repo_path, &form.branch);
 
     let repo_path = form.repo_path.clone();
@@ -152,31 +171,26 @@ async fn fresh_submit(
     };
 
     let session = ReviewSession::new(analysis);
-    if let Err(e) = session.save() {
-        return format::render().view(
-            &v,
-            "repo/_error.html",
-            data!({"message": format!("Failed to save session: {e}")}),
-        );
-    }
 
-    let merge_base_short = if session.merge_base.len() > 8 {
-        &session.merge_base[..8]
-    } else {
-        &session.merge_base
+    let model = match rs_model::find_or_create(&ctx.db, &session).await {
+        Ok(m) => m,
+        Err(e) => {
+            return format::render().view(
+                &v,
+                "repo/_error.html",
+                data!({"message": format!("Failed to save session: {e}")}),
+            );
+        }
     };
+    let _ = session.save();
 
-    format::render().view(
-        &v,
-        "repo/_success.html",
-        data!({
-            "session_id": session.id,
-            "branch": session.branch,
-            "default_branch": session.default_branch,
-            "changed_files_count": session.changed_files.len(),
-            "merge_base": merge_base_short,
-        }),
-    )
+    background_analysis::spawn_all_analyses(ctx.db.clone(), model.id, session.clone());
+
+    Ok(axum::response::Response::builder()
+        .header("HX-Redirect", format!("/review/{}/loading", session.id))
+        .body(axum::body::Body::empty())
+        .unwrap()
+        .into_response())
 }
 
 pub fn page_routes() -> Routes {
