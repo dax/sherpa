@@ -1,0 +1,16 @@
+{
+  "name": "guided-review",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "css:build": "npx @tailwindcss/cli -i assets/css/app.css -o assets/static/css/app.css --minify",
+    "css:watch": "npx @tailwindcss/cli -i assets/css/app.css -o assets/static/css/app.css --watch",
+    "js:copy": "cp node_modules/flyonui/flyonui.js assets/static/js/flyonui.js",
+    "build": "npm run css:build && npm run js:copy"
+  },
+  "dependencies": {
+    "@tailwindcss/cli": "^4.1.18",
+    "flyonui": "^2.4.1",
+    "tailwindcss": "^4.1.18"
+  }
+}
