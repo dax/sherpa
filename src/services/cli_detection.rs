@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::path::PathBuf;
+use tokio::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -62,6 +63,44 @@ impl DetectionResult {
         } else {
             None
         }
+    }
+}
+
+/// Claude Code has no `models` subcommand, so we maintain a static list.
+const CLAUDE_MODELS: &[&str] = &[
+    "sonnet",
+    "opus",
+    "haiku",
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-6",
+    "claude-opus-4-5-20251101",
+    "claude-opus-4-1-20250805",
+    "claude-opus-4-20250514",
+    "claude-haiku-4-5-20251001",
+    "claude-3-7-sonnet-20250219",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
+];
+
+/// OpenCode: runs `opencode models`; Claude Code: returns a hardcoded list.
+pub async fn list_models(cli: AiCli) -> Vec<String> {
+    match cli {
+        AiCli::Opencode => list_opencode_models().await,
+        AiCli::Claude => CLAUDE_MODELS.iter().map(|s| (*s).to_string()).collect(),
+    }
+}
+
+async fn list_opencode_models() -> Vec<String> {
+    let output = Command::new("opencode").arg("models").output().await;
+
+    match output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -166,5 +205,24 @@ mod tests {
     fn test_detect_cli_tools_runs_without_panic() {
         let result = detect_cli_tools();
         assert_eq!(result.tools.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_models_claude_returns_hardcoded() {
+        let models = list_models(AiCli::Claude).await;
+        assert!(!models.is_empty());
+        assert!(models.contains(&"sonnet".to_string()));
+        assert!(models.contains(&"opus".to_string()));
+        assert!(models.contains(&"haiku".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_list_models_opencode_returns_without_panic() {
+        let models = list_models(AiCli::Opencode).await;
+        if which::which("opencode").is_ok() {
+            assert!(!models.is_empty());
+        } else {
+            assert!(models.is_empty());
+        }
     }
 }

@@ -44,14 +44,6 @@ pub struct ReviewStep {
 pub struct StepAiData {
     pub explanation: Option<String>,
     pub relation_to_previous: Option<String>,
-    pub symbols: Option<Vec<SymbolInfo>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SymbolInfo {
-    pub name: String,
-    pub kind: String,
-    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +75,8 @@ pub struct ReviewSession {
     pub review_plan: Option<ReviewPlan>,
     #[serde(default)]
     pub validated_steps: Vec<bool>,
+    #[serde(default)]
+    pub primed_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -138,6 +132,7 @@ impl ReviewSession {
             metrics,
             review_plan: None,
             validated_steps: Vec::new(),
+            primed_session_id: None,
         }
     }
 

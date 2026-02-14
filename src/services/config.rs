@@ -15,8 +15,9 @@ pub struct SherpaConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AiConfig {
     pub selected_cli: Option<AiCli>,
-    /// AI CLI call timeout in seconds (default: 120)
     pub timeout_secs: Option<u64>,
+    pub deep_model: Option<String>,
+    pub fast_model: Option<String>,
 }
 
 impl SherpaConfig {
@@ -164,6 +165,44 @@ mod tests {
         config.save(&path).unwrap();
 
         assert!(path.exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_model_config_roundtrip() {
+        let dir = std::env::temp_dir().join("sherpa_test_model_config");
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+
+        let mut config = SherpaConfig::default();
+        config.ai.selected_cli = Some(AiCli::Claude);
+        config.ai.deep_model = Some("o3".to_string());
+        config.ai.fast_model = Some("gpt-4o-mini".to_string());
+        config.save(&path).unwrap();
+
+        let loaded = SherpaConfig::load(&path).unwrap();
+        assert_eq!(loaded.ai.deep_model, Some("o3".to_string()));
+        assert_eq!(loaded.ai.fast_model, Some("gpt-4o-mini".to_string()));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_config_without_model_fields_backward_compat() {
+        let dir = std::env::temp_dir().join("sherpa_test_no_model_fields");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+
+        let content = "[ai]\nselected_cli = \"claude\"\ntimeout_secs = 60\n";
+        fs::write(&path, content).unwrap();
+
+        let loaded = SherpaConfig::load(&path).unwrap();
+        assert_eq!(loaded.ai.selected_cli, Some(AiCli::Claude));
+        assert_eq!(loaded.ai.timeout_secs, Some(60));
+        assert!(loaded.ai.deep_model.is_none());
+        assert!(loaded.ai.fast_model.is_none());
 
         let _ = fs::remove_dir_all(&dir);
     }
