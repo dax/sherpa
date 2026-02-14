@@ -159,6 +159,98 @@ fn count_commits(path: &Path, range: &str) -> Result<usize, GitAnalysisError> {
         })
 }
 
+/// Extract the unified diff section(s) for the given file paths from a full
+/// multi-file unified diff string.  Returns a new unified diff containing only
+/// the matching file sections.
+///
+/// If `diff_lines` is `Some((start, end))`, the returned diff for that file is
+/// further narrowed to lines `start..=end` (1-indexed within that file's diff
+/// section, including headers).  If `None`, the entire file section is included.
+pub fn extract_diff_for_files(
+    full_diff: &str,
+    file_refs: &[(String, Option<(usize, usize)>)],
+) -> String {
+    let sections = split_diff_by_file(full_diff);
+    let mut result = String::new();
+
+    for (path, diff_lines) in file_refs {
+        if let Some(section) = sections.iter().find(|s| s.path == *path) {
+            match diff_lines {
+                Some((start, end)) => {
+                    let lines: Vec<&str> = section.content.lines().collect();
+                    let start_idx = start.saturating_sub(1);
+                    let end_idx = (*end).min(lines.len());
+                    if start_idx < end_idx {
+                        if !result.is_empty() {
+                            result.push('\n');
+                        }
+                        result.push_str(&lines[start_idx..end_idx].join("\n"));
+                        result.push('\n');
+                    }
+                }
+                None => {
+                    if !result.is_empty() {
+                        result.push('\n');
+                    }
+                    result.push_str(&section.content);
+                    if !section.content.ends_with('\n') {
+                        result.push('\n');
+                    }
+                }
+            }
+        }
+    }
+
+    result
+}
+
+#[derive(Debug)]
+struct DiffSection {
+    path: String,
+    content: String,
+}
+
+fn split_diff_by_file(full_diff: &str) -> Vec<DiffSection> {
+    let mut sections = Vec::new();
+    let mut current_lines: Vec<&str> = Vec::new();
+    let mut current_path: Option<String> = None;
+
+    for line in full_diff.lines() {
+        if line.starts_with("diff --git ") {
+            if let Some(path) = current_path.take() {
+                sections.push(DiffSection {
+                    path,
+                    content: current_lines.join("\n") + "\n",
+                });
+            }
+            current_lines.clear();
+            current_path = parse_diff_git_path(line);
+            current_lines.push(line);
+        } else {
+            current_lines.push(line);
+        }
+    }
+
+    if let Some(path) = current_path {
+        sections.push(DiffSection {
+            path,
+            content: current_lines.join("\n") + "\n",
+        });
+    }
+
+    sections
+}
+
+fn parse_diff_git_path(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("diff --git ")?;
+    let parts: Vec<&str> = rest.splitn(2, " b/").collect();
+    if parts.len() == 2 {
+        Some(parts[1].to_string())
+    } else {
+        None
+    }
+}
+
 pub fn compute_diff_line_stats(diff: &str) -> (usize, usize) {
     let mut added = 0;
     let mut removed = 0;
@@ -329,5 +421,82 @@ mod tests {
 
         let err = GitAnalysisError::NoBranch;
         assert!(err.to_string().contains("detached"));
+    }
+
+    fn multi_file_diff() -> &'static str {
+        "diff --git a/src/lib.rs b/src/lib.rs\n\
+         --- a/src/lib.rs\n\
+         +++ b/src/lib.rs\n\
+         @@ -1,3 +1,4 @@\n\
+         +use crate::new;\n\
+         pub mod old;\n\
+         \n\
+         diff --git a/src/new.rs b/src/new.rs\n\
+         --- /dev/null\n\
+         +++ b/src/new.rs\n\
+         @@ -0,0 +1,5 @@\n\
+         +pub fn hello() {\n\
+         +    println!(\"hello\");\n\
+         +}\n"
+    }
+
+    #[test]
+    fn test_extract_diff_for_single_file() {
+        let refs = vec![("src/lib.rs".to_string(), None)];
+        let result = extract_diff_for_files(multi_file_diff(), &refs);
+        assert!(result.contains("diff --git a/src/lib.rs"));
+        assert!(result.contains("+use crate::new;"));
+        assert!(!result.contains("src/new.rs"));
+    }
+
+    #[test]
+    fn test_extract_diff_for_multiple_files() {
+        let refs = vec![
+            ("src/lib.rs".to_string(), None),
+            ("src/new.rs".to_string(), None),
+        ];
+        let result = extract_diff_for_files(multi_file_diff(), &refs);
+        assert!(result.contains("src/lib.rs"));
+        assert!(result.contains("src/new.rs"));
+    }
+
+    #[test]
+    fn test_extract_diff_with_line_range() {
+        let refs = vec![("src/lib.rs".to_string(), Some((1, 3)))];
+        let result = extract_diff_for_files(multi_file_diff(), &refs);
+        assert!(result.contains("diff --git a/src/lib.rs"));
+        assert!(result.contains("--- a/src/lib.rs"));
+        assert!(!result.contains("+use crate::new;"));
+    }
+
+    #[test]
+    fn test_extract_diff_for_nonexistent_file() {
+        let refs = vec![("src/missing.rs".to_string(), None)];
+        let result = extract_diff_for_files(multi_file_diff(), &refs);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_extract_diff_empty_input() {
+        let refs = vec![("src/lib.rs".to_string(), None)];
+        let result = extract_diff_for_files("", &refs);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_split_diff_by_file() {
+        let sections = split_diff_by_file(multi_file_diff());
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].path, "src/lib.rs");
+        assert_eq!(sections[1].path, "src/new.rs");
+    }
+
+    #[test]
+    fn test_parse_diff_git_path() {
+        assert_eq!(
+            parse_diff_git_path("diff --git a/src/lib.rs b/src/lib.rs"),
+            Some("src/lib.rs".to_string())
+        );
+        assert_eq!(parse_diff_git_path("not a diff line"), None);
     }
 }

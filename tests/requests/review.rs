@@ -3,7 +3,7 @@ use serial_test::serial;
 use sherpa::app::App;
 use sherpa::services::git_analysis::{ChangedFile, FileStatus, GitAnalysis};
 use sherpa::services::review_session::{
-    FileRef, ReviewPlan, ReviewSession, ReviewStep,
+    FileRef, ReviewPlan, ReviewSession, ReviewStep, StepAiData,
 };
 
 fn create_test_session() -> ReviewSession {
@@ -145,6 +145,7 @@ fn create_session_with_plan() -> ReviewSession {
                     path: "src/lib.rs".to_string(),
                     diff_lines: None,
                 }],
+                ai_data: StepAiData::default(),
             },
             ReviewStep {
                 title: "New feature code".to_string(),
@@ -153,6 +154,7 @@ fn create_session_with_plan() -> ReviewSession {
                     path: "src/new.rs".to_string(),
                     diff_lines: Some((1, 10)),
                 }],
+                ai_data: StepAiData::default(),
             },
         ],
         generated_at: "12:00:00".to_string(),
@@ -309,6 +311,231 @@ async fn success_page_links_to_summary() {
             !body.contains("coming soon"),
             "Continue button should no longer say coming soon"
         );
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn can_get_step_page() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide/step/1"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(body.contains("Step 1 of 2"), "should show step number");
+        assert!(body.contains("Core data models"), "should show step title");
+        assert!(
+            body.contains("Foundation types"),
+            "should show step rationale"
+        );
+        assert!(body.contains("lib.rs"), "should show file reference");
+        assert!(
+            body.contains("diff-container"),
+            "should have diff container"
+        );
+        assert!(
+            body.contains("hx-get"),
+            "should have HTMX triggers for AI sections"
+        );
+        assert!(
+            body.contains("/explanation"),
+            "should have explanation section trigger"
+        );
+        assert!(
+            body.contains("/symbols"),
+            "should have symbols section trigger"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn step_page_shows_navigation() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide/step/1"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+        let body = res.text();
+        assert!(
+            body.contains("Next Step"),
+            "step 1 should have Next Step button"
+        );
+        assert!(
+            !body.contains("prev_step_title"),
+            "step 1 should not show previous step"
+        );
+
+        let res = request
+            .get(&format!("/review/{session_id}/guide/step/2"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+        let body = res.text();
+        assert!(
+            body.contains("Core data models"),
+            "step 2 should show previous step title"
+        );
+        assert!(
+            body.contains("/relation"),
+            "step 2 should have relation section trigger"
+        );
+        assert!(
+            body.contains("Back to Guide"),
+            "last step should have Back to Guide button"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn step_page_returns_404_for_invalid_step() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide/step/99"))
+            .await;
+
+        assert_eq!(res.status_code(), 404);
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn step_page_returns_404_for_invalid_session() {
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get("/review/nonexistent-session/guide/step/1")
+            .await;
+
+        assert_eq!(res.status_code(), 404);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn step_page_redirects_without_plan() {
+    let session = create_test_session();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide/step/1"))
+            .await;
+
+        let status = res.status_code();
+        assert!(
+            status == 200 || status == 303 || status == 302,
+            "should redirect or show summary, got {status}"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn can_skip_step_section() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!(
+                "/review/{session_id}/guide/step/1/skip/explanation"
+            ))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+        let body = res.text();
+        assert!(
+            body.contains("AI analysis skipped"),
+            "should show skipped message"
+        );
+        assert!(
+            body.contains("Step Explanation"),
+            "should show section title"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn guide_page_has_step_links() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+        let body = res.text();
+        assert!(
+            body.contains("/guide/step/1"),
+            "should have link to step 1"
+        );
+        assert!(
+            body.contains("/guide/step/2"),
+            "should have link to step 2"
+        );
+        assert!(
+            body.contains("Review Step"),
+            "should have Review Step button"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn step_page_sidebar_highlights_current_step() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide/step/1"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+        let body = res.text();
+        assert!(
+            body.contains("step-primary"),
+            "should highlight current step in sidebar"
+        );
+
+        cleanup_session(&session_id);
     })
     .await;
 }

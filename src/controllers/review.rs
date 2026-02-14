@@ -7,8 +7,9 @@ use crate::services::{
     ai_cli::{self, AiPrompt},
     cli_detection::AiCli,
     config::SherpaConfig,
+    git_analysis,
     review_session::{
-        fallback_review_plan, ChatMessage, ReviewPlan, ReviewSession, ReviewStep,
+        fallback_review_plan, ChatMessage, ReviewPlan, ReviewSession, ReviewStep, SymbolInfo,
     },
 };
 
@@ -437,6 +438,399 @@ fn chrono_now() -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
+#[debug_handler]
+async fn step_page(
+    ViewEngine(v): ViewEngine<TeraView>,
+    Path((session_id, step_number)): Path<(String, usize)>,
+) -> Result<Response> {
+    let session = ReviewSession::load(&session_id).map_err(|e| {
+        tracing::error!("Failed to load session {session_id}: {e}");
+        Error::NotFound
+    })?;
+
+    let plan = match &session.review_plan {
+        Some(plan) => plan.clone(),
+        None => {
+            return format::render().redirect(&format!("/review/{session_id}/summary"));
+        }
+    };
+
+    let total_steps = plan.steps.len();
+    if step_number < 1 || step_number > total_steps {
+        return Err(Error::NotFound);
+    }
+
+    let step = &plan.steps[step_number - 1];
+    let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
+        .file_refs
+        .iter()
+        .map(|f| (f.path.clone(), f.diff_lines))
+        .collect();
+    let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
+
+    let step_files: Vec<String> = step.file_refs.iter().map(|f| f.path.clone()).collect();
+
+    let steps_data: Vec<serde_json::Value> = plan
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            serde_json::json!({
+                "number": i + 1,
+                "title": s.title,
+                "file_count": s.file_refs.len(),
+                "active": i + 1 == step_number,
+            })
+        })
+        .collect();
+
+    let has_previous = step_number > 1;
+    let prev_step_title = if has_previous {
+        Some(plan.steps[step_number - 2].title.clone())
+    } else {
+        None
+    };
+
+    format::render().view(
+        &v,
+        "review/step.html",
+        data!({
+            "session_id": session.id,
+            "branch": session.branch,
+            "default_branch": session.default_branch,
+            "step_number": step_number,
+            "total_steps": total_steps,
+            "step_title": step.title,
+            "step_rationale": step.rationale,
+            "step_files": step_files,
+            "step_diff": step_diff,
+            "steps": steps_data,
+            "has_previous": has_previous,
+            "prev_step_title": prev_step_title,
+        }),
+    )
+}
+
+#[debug_handler]
+async fn step_explanation(
+    ViewEngine(v): ViewEngine<TeraView>,
+    Path((session_id, step_number)): Path<(String, usize)>,
+) -> Result<Response> {
+    let session = ReviewSession::load(&session_id).map_err(|e| {
+        tracing::error!("Failed to load session {session_id}: {e}");
+        Error::NotFound
+    })?;
+
+    let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
+    if step_number < 1 || step_number > plan.steps.len() {
+        return Err(Error::NotFound);
+    }
+
+    let idx = step_number - 1;
+    let step = &plan.steps[idx];
+
+    if let Some(ref cached) = step.ai_data.explanation {
+        return format::render().view(
+            &v,
+            "review/_section_content.html",
+            data!({"title": "Step Explanation", "content": cached, "section_id": "step-explanation"}),
+        );
+    }
+
+    let cli = match load_selected_cli() {
+        Some(cli) => cli,
+        None => {
+            return format::render().view(
+                &v,
+                "review/_section_error.html",
+                data!({
+                    "title": "Step Explanation",
+                    "error": "No AI backend configured",
+                    "section_id": "step-explanation",
+                    "session_id": session_id,
+                    "retry_url": format!("/review/{session_id}/guide/step/{step_number}/explanation"),
+                    "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/explanation"),
+                }),
+            );
+        }
+    };
+
+    let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
+        .file_refs
+        .iter()
+        .map(|f| (f.path.clone(), f.diff_lines))
+        .collect();
+    let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
+
+    let context = build_ai_context(&session);
+    let prompt = AiPrompt {
+        context,
+        instruction: ai_cli::step_explanation_instruction(&step.title, &step_diff),
+    };
+
+    match ai_cli::generate(cli, &prompt).await {
+        Ok(content) => {
+            let mut session = ReviewSession::load(&session_id).map_err(|e| {
+                tracing::error!("Failed to reload session: {e}");
+                Error::NotFound
+            })?;
+            session.review_plan.as_mut().unwrap().steps[idx]
+                .ai_data
+                .explanation = Some(content.clone());
+            let _ = session.save();
+
+            format::render().view(
+                &v,
+                "review/_section_content.html",
+                data!({"title": "Step Explanation", "content": content, "section_id": "step-explanation"}),
+            )
+        }
+        Err(e) => format::render().view(
+            &v,
+            "review/_section_error.html",
+            data!({
+                "title": "Step Explanation",
+                "error": e.to_string(),
+                "section_id": "step-explanation",
+                "session_id": session_id,
+                "retry_url": format!("/review/{session_id}/guide/step/{step_number}/explanation"),
+                "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/explanation"),
+            }),
+        ),
+    }
+}
+
+#[debug_handler]
+async fn step_relation(
+    ViewEngine(v): ViewEngine<TeraView>,
+    Path((session_id, step_number)): Path<(String, usize)>,
+) -> Result<Response> {
+    let session = ReviewSession::load(&session_id).map_err(|e| {
+        tracing::error!("Failed to load session {session_id}: {e}");
+        Error::NotFound
+    })?;
+
+    let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
+    if step_number < 2 || step_number > plan.steps.len() {
+        return Err(Error::NotFound);
+    }
+
+    let idx = step_number - 1;
+    let step = &plan.steps[idx];
+
+    if let Some(ref cached) = step.ai_data.relation_to_previous {
+        return format::render().view(
+            &v,
+            "review/_section_content.html",
+            data!({"title": "Relation to Previous Step", "content": cached, "section_id": "step-relation"}),
+        );
+    }
+
+    let cli = match load_selected_cli() {
+        Some(cli) => cli,
+        None => {
+            return format::render().view(
+                &v,
+                "review/_section_error.html",
+                data!({
+                    "title": "Relation to Previous Step",
+                    "error": "No AI backend configured",
+                    "section_id": "step-relation",
+                    "session_id": session_id,
+                    "retry_url": format!("/review/{session_id}/guide/step/{step_number}/relation"),
+                    "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/relation"),
+                }),
+            );
+        }
+    };
+
+    let prev_title = &plan.steps[idx - 1].title;
+    let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
+        .file_refs
+        .iter()
+        .map(|f| (f.path.clone(), f.diff_lines))
+        .collect();
+    let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
+
+    let context = build_ai_context(&session);
+    let prompt = AiPrompt {
+        context,
+        instruction: ai_cli::step_relation_instruction(prev_title, &step.title, &step_diff),
+    };
+
+    match ai_cli::generate(cli, &prompt).await {
+        Ok(content) => {
+            let mut session = ReviewSession::load(&session_id).map_err(|e| {
+                tracing::error!("Failed to reload session: {e}");
+                Error::NotFound
+            })?;
+            session.review_plan.as_mut().unwrap().steps[idx]
+                .ai_data
+                .relation_to_previous = Some(content.clone());
+            let _ = session.save();
+
+            format::render().view(
+                &v,
+                "review/_section_content.html",
+                data!({"title": "Relation to Previous Step", "content": content, "section_id": "step-relation"}),
+            )
+        }
+        Err(e) => format::render().view(
+            &v,
+            "review/_section_error.html",
+            data!({
+                "title": "Relation to Previous Step",
+                "error": e.to_string(),
+                "section_id": "step-relation",
+                "session_id": session_id,
+                "retry_url": format!("/review/{session_id}/guide/step/{step_number}/relation"),
+                "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/relation"),
+            }),
+        ),
+    }
+}
+
+#[debug_handler]
+async fn step_symbols(
+    ViewEngine(v): ViewEngine<TeraView>,
+    Path((session_id, step_number)): Path<(String, usize)>,
+) -> Result<Response> {
+    let session = ReviewSession::load(&session_id).map_err(|e| {
+        tracing::error!("Failed to load session {session_id}: {e}");
+        Error::NotFound
+    })?;
+
+    let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
+    if step_number < 1 || step_number > plan.steps.len() {
+        return Err(Error::NotFound);
+    }
+
+    let idx = step_number - 1;
+    let step = &plan.steps[idx];
+
+    if let Some(ref cached) = step.ai_data.symbols {
+        return format::render().view(
+            &v,
+            "review/_step_symbols.html",
+            data!({"symbols": cached}),
+        );
+    }
+
+    let cli = match load_selected_cli() {
+        Some(cli) => cli,
+        None => {
+            return format::render().view(
+                &v,
+                "review/_section_error.html",
+                data!({
+                    "title": "Changed Symbols",
+                    "error": "No AI backend configured",
+                    "section_id": "step-symbols",
+                    "session_id": session_id,
+                    "retry_url": format!("/review/{session_id}/guide/step/{step_number}/symbols"),
+                    "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/symbols"),
+                }),
+            );
+        }
+    };
+
+    let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
+        .file_refs
+        .iter()
+        .map(|f| (f.path.clone(), f.diff_lines))
+        .collect();
+    let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
+
+    let context = build_ai_context(&session);
+    let prompt = AiPrompt {
+        context,
+        instruction: ai_cli::step_symbols_instruction(&step_diff),
+    };
+
+    match ai_cli::generate(cli, &prompt).await {
+        Ok(raw) => {
+            match ai_cli::extract_json_from_response(&raw)
+                .and_then(|json| {
+                    serde_json::from_str::<Vec<SymbolInfo>>(&json)
+                        .map_err(|e| format!("Failed to parse symbols JSON: {e}"))
+                })
+            {
+                Ok(symbols) => {
+                    let mut session = ReviewSession::load(&session_id).map_err(|e| {
+                        tracing::error!("Failed to reload session: {e}");
+                        Error::NotFound
+                    })?;
+                    session.review_plan.as_mut().unwrap().steps[idx]
+                        .ai_data
+                        .symbols = Some(symbols.clone());
+                    let _ = session.save();
+
+                    format::render().view(
+                        &v,
+                        "review/_step_symbols.html",
+                        data!({"symbols": symbols}),
+                    )
+                }
+                Err(error) => format::render().view(
+                    &v,
+                    "review/_section_error.html",
+                    data!({
+                        "title": "Changed Symbols",
+                        "error": error,
+                        "section_id": "step-symbols",
+                        "session_id": session_id,
+                        "retry_url": format!("/review/{session_id}/guide/step/{step_number}/symbols"),
+                        "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/symbols"),
+                    }),
+                ),
+            }
+        }
+        Err(e) => format::render().view(
+            &v,
+            "review/_section_error.html",
+            data!({
+                "title": "Changed Symbols",
+                "error": e.to_string(),
+                "section_id": "step-symbols",
+                "session_id": session_id,
+                "retry_url": format!("/review/{session_id}/guide/step/{step_number}/symbols"),
+                "skip_url": format!("/review/{session_id}/guide/step/{step_number}/skip/symbols"),
+            }),
+        ),
+    }
+}
+
+#[debug_handler]
+async fn step_section_skip(
+    ViewEngine(v): ViewEngine<TeraView>,
+    Path((session_id, step_number, section)): Path<(String, usize, String)>,
+) -> Result<Response> {
+    let title = match section.as_str() {
+        "explanation" => "Step Explanation",
+        "relation" => "Relation to Previous Step",
+        "symbols" => "Changed Symbols",
+        _ => "Unknown Section",
+    };
+
+    let section_id = match section.as_str() {
+        "explanation" => "step-explanation",
+        "relation" => "step-relation",
+        "symbols" => "step-symbols",
+        _ => &section,
+    };
+
+    format::render().view(
+        &v,
+        "review/_section_skipped.html",
+        data!({
+            "title": title,
+            "section_id": section_id,
+            "session_id": session_id,
+            "retry_url": format!("/review/{session_id}/guide/step/{step_number}/{section}"),
+        }),
+    )
+}
+
 pub fn page_routes() -> Routes {
     Routes::new()
         .prefix("/review")
@@ -448,6 +842,11 @@ pub fn page_routes() -> Routes {
         .add("/{session_id}/summary/chat", post(summary_chat))
         .add("/{session_id}/guide/start", post(guide_start))
         .add("/{session_id}/guide/plan/skip", post(guide_plan_skip))
+        .add("/{session_id}/guide/step/{step_number}", get(step_page))
+        .add("/{session_id}/guide/step/{step_number}/explanation", get(step_explanation))
+        .add("/{session_id}/guide/step/{step_number}/relation", get(step_relation))
+        .add("/{session_id}/guide/step/{step_number}/symbols", get(step_symbols))
+        .add("/{session_id}/guide/step/{step_number}/skip/{section}", get(step_section_skip))
         .add("/{session_id}/guide", get(guide_page))
 }
 

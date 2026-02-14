@@ -32,6 +32,22 @@ pub struct ReviewStep {
     pub title: String,
     pub rationale: String,
     pub file_refs: Vec<FileRef>,
+    #[serde(default)]
+    pub ai_data: StepAiData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StepAiData {
+    pub explanation: Option<String>,
+    pub relation_to_previous: Option<String>,
+    pub symbols: Option<Vec<SymbolInfo>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolInfo {
+    pub name: String,
+    pub kind: String,
+    pub description: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +183,7 @@ pub fn fallback_review_plan(session: &ReviewSession) -> ReviewPlan {
                 path: f.path.clone(),
                 diff_lines: None,
             }],
+            ai_data: StepAiData::default(),
         })
         .collect();
 
@@ -346,6 +363,7 @@ mod tests {
                         diff_lines: None,
                     },
                 ],
+                ai_data: StepAiData::default(),
             }],
             generated_at: "12:00:00".to_string(),
         };
@@ -375,6 +393,7 @@ mod tests {
                     path: "file.rs".to_string(),
                     diff_lines: None,
                 }],
+                ai_data: StepAiData::default(),
             }],
             generated_at: "10:00:00".to_string(),
         });

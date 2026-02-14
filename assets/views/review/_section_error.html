@@ -16,7 +16,7 @@
                 <span id="{{ section_id }}-retry-spinner" class="loading loading-spinner loading-xs htmx-indicator"></span>
                 Retry
             </button>
-            <button hx-get="/review/{{ session_id }}/summary/skip/{{ section_id }}"
+            <button hx-get="{{ skip_url | default(value='/review/' ~ session_id ~ '/summary/skip/' ~ section_id) }}"
                     hx-target="#{{ section_id }}-section"
                     hx-swap="outerHTML"
                     class="btn btn-sm btn-ghost">

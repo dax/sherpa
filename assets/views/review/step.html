@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}Sherpa — Step {{ step_number }}: {{ step_title }}{% endblock %}
+
+{% block content %}
+<div class="flex min-h-screen">
+    <aside class="w-80 bg-base-100 border-r border-base-300 p-4 overflow-y-auto">
+        <div class="mb-4">
+            <h2 class="text-lg font-bold">Review Plan</h2>
+            <p class="text-sm text-base-content/60 mt-1">
+                {{ branch }} &rarr; {{ default_branch }}
+            </p>
+            <p class="text-xs text-base-content/50 mt-1">{{ total_steps }} steps</p>
+        </div>
+
+        <ul class="steps steps-vertical w-full">
+            {% for step in steps %}
+            <li class="step {% if step.active %}step-primary{% endif %}">
+                <a href="/review/{{ session_id }}/guide/step/{{ step.number }}" class="w-full">
+                    <div class="text-left w-full py-2">
+                        <div class="font-medium text-sm">{{ step.title }}</div>
+                        <div class="text-xs text-base-content/50">
+                            {{ step.file_count }} file{% if step.file_count != 1 %}s{% endif %}
+                        </div>
+                    </div>
+                </a>
+            </li>
+            {% endfor %}
+        </ul>
+
+        <div class="mt-6 space-y-2">
+            <a href="/review/{{ session_id }}/guide" class="btn btn-ghost btn-sm w-full">
+                Back to Guide
+            </a>
+            <a href="/review/{{ session_id }}/summary" class="btn btn-ghost btn-sm w-full">
+                Back to Summary
+            </a>
+        </div>
+    </aside>
+
+    <main class="flex-1 p-6 overflow-y-auto">
+        <div class="max-w-4xl mx-auto">
+            <div class="flex items-center gap-3 mb-6">
+                <span class="badge badge-primary badge-lg font-mono">Step {{ step_number }} of {{ total_steps }}</span>
+                <h1 class="text-2xl font-bold">{{ step_title }}</h1>
+            </div>
+
+            <p class="text-base-content/70 mb-4">{{ step_rationale }}</p>
+
+            <div class="flex flex-wrap gap-2 mb-6">
+                {% for file in step_files %}
+                <span class="badge badge-outline badge-sm font-mono">{{ file }}</span>
+                {% endfor %}
+            </div>
+
+            <div class="space-y-4">
+                <div id="step-explanation-section"
+                     hx-get="/review/{{ session_id }}/guide/step/{{ step_number }}/explanation"
+                     hx-trigger="load"
+                     hx-swap="outerHTML">
+                    {% include "review/_section_loading.html" %}
+                </div>
+
+                {% if has_previous %}
+                <div id="step-relation-section"
+                     hx-get="/review/{{ session_id }}/guide/step/{{ step_number }}/relation"
+                     hx-trigger="load"
+                     hx-swap="outerHTML">
+                    {% include "review/_section_loading.html" %}
+                </div>
+                {% endif %}
+
+                <div id="step-symbols-section"
+                     hx-get="/review/{{ session_id }}/guide/step/{{ step_number }}/symbols"
+                     hx-trigger="load"
+                     hx-swap="outerHTML">
+                    {% include "review/_section_loading.html" %}
+                </div>
+
+                <div class="card bg-base-100 shadow">
+                    <div class="card-body">
+                        <h2 class="card-title text-lg">Changes</h2>
+                        <div id="diff-container" class="mt-2"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex justify-between mt-6">
+                {% if has_previous %}
+                <a href="/review/{{ session_id }}/guide/step/{{ step_number - 1 }}" class="btn btn-outline btn-sm">
+                    &larr; {{ prev_step_title }}
+                </a>
+                {% else %}
+                <div></div>
+                {% endif %}
+
+                {% if step_number < total_steps %}
+                <a href="/review/{{ session_id }}/guide/step/{{ step_number + 1 }}" class="btn btn-primary btn-sm">
+                    Next Step &rarr;
+                </a>
+                {% else %}
+                <a href="/review/{{ session_id }}/guide" class="btn btn-primary btn-sm">
+                    Back to Guide
+                </a>
+                {% endif %}
+            </div>
+        </div>
+    </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var diffString = {{ step_diff | json_encode() | safe }};
+    if (diffString && diffString.trim()) {
+        var diffHtml = Diff2Html.html(diffString, {
+            drawFileList: true,
+            matching: 'lines',
+            outputFormat: 'line-by-line',
+            colorScheme: 'dark'
+        });
+        document.getElementById('diff-container').innerHTML = diffHtml;
+    } else {
+        document.getElementById('diff-container').innerHTML = '<p class="text-base-content/50 italic">No diff available for this step</p>';
+    }
+});
+</script>
+{% endblock %}

@@ -142,6 +142,43 @@ pub fn review_plan_instruction() -> &'static str {
      or null for the entire file. Order steps in recommended review sequence."
 }
 
+pub fn step_explanation_instruction(step_title: &str, step_diff: &str) -> String {
+    format!(
+        "You are explaining review step \"{step_title}\".\n\n\
+         Here is the diff for this step:\n```\n{step_diff}\n```\n\n\
+         Write a clear 2-3 paragraph explanation of what these changes do, why they exist, \
+         and any important details a reviewer should notice. Be specific about the code."
+    )
+}
+
+pub fn step_relation_instruction(
+    prev_title: &str,
+    current_title: &str,
+    current_diff: &str,
+) -> String {
+    format!(
+        "The reviewer just finished step \"{prev_title}\" and is now on step \"{current_title}\".\n\n\
+         Here is the diff for the current step:\n```\n{current_diff}\n```\n\n\
+         In 1-2 sentences, explain how this step relates to or builds on the previous step. \
+         Be concise and specific."
+    )
+}
+
+pub fn step_symbols_instruction(step_diff: &str) -> String {
+    format!(
+        "Analyze this diff and identify the key symbols (modules, classes, functions, types) \
+         that were changed or introduced:\n```\n{step_diff}\n```\n\n\
+         Respond with ONLY a JSON array inside a ```json fence:\n\
+         ```json\n\
+         [\n\
+           {{\"name\": \"function_name\", \"kind\": \"function\", \"description\": \"Brief responsibility description\"}}\n\
+         ]\n\
+         ```\n\
+         kind should be one of: module, class, struct, enum, function, method, trait, type, const. \
+         Keep descriptions to one sentence each."
+    )
+}
+
 pub fn extract_json_from_response(raw: &str) -> Result<String, String> {
     if serde_json::from_str::<serde_json::Value>(raw).is_ok() {
         return Ok(raw.to_string());

@@ -16,12 +16,14 @@
         <ul class="steps steps-vertical w-full">
             {% for step in steps %}
             <li class="step" data-step="{{ step.number }}">
-                <div class="text-left w-full py-2">
-                    <div class="font-medium text-sm">{{ step.title }}</div>
-                    <div class="text-xs text-base-content/50">
-                        {{ step.file_count }} file{% if step.file_count != 1 %}s{% endif %}
+                <a href="/review/{{ session_id }}/guide/step/{{ step.number }}" class="w-full">
+                    <div class="text-left w-full py-2">
+                        <div class="font-medium text-sm">{{ step.title }}</div>
+                        <div class="text-xs text-base-content/50">
+                            {{ step.file_count }} file{% if step.file_count != 1 %}s{% endif %}
+                        </div>
                     </div>
-                </div>
+                </a>
             </li>
             {% endfor %}
         </ul>
@@ -53,6 +55,9 @@
                                     {% for file in step.files %}
                                     <span class="badge badge-outline badge-sm font-mono">{{ file }}</span>
                                     {% endfor %}
+                                </div>
+                                <div class="mt-3">
+                                    <a href="/review/{{ session_id }}/guide/step/{{ step.number }}" class="btn btn-primary btn-sm">Review Step</a>
                                 </div>
                             </div>
                         </div>
