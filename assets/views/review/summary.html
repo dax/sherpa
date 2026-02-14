@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Sherpa — Review Summary{% endblock %}
+
+{% block content %}
+<div class="container mx-auto max-w-4xl p-6">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">Review Summary</h1>
+            <p class="text-base-content/70 mt-1">
+                Branch <span class="font-mono font-semibold">{{ branch }}</span>
+                against <span class="font-mono font-semibold">{{ default_branch }}</span>
+            </p>
+        </div>
+        <a href="/" class="btn btn-ghost btn-sm">Back to Home</a>
+    </div>
+
+    <div class="space-y-4">
+        <div id="overview-section"
+             hx-get="/review/{{ session_id }}/summary/overview"
+             hx-trigger="load"
+             hx-swap="outerHTML">
+            {% include "review/_section_loading.html" %}
+        </div>
+
+        <div id="changes-section"
+             hx-get="/review/{{ session_id }}/summary/changes"
+             hx-trigger="load"
+             hx-swap="outerHTML">
+            {% include "review/_section_loading.html" %}
+        </div>
+
+        <div id="approach-section"
+             hx-get="/review/{{ session_id }}/summary/approach"
+             hx-trigger="load"
+             hx-swap="outerHTML">
+            {% include "review/_section_loading.html" %}
+        </div>
+
+        <div class="card bg-base-100 shadow">
+            <div class="card-body">
+                <h2 class="card-title text-lg">Metrics</h2>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-2">
+                    <div class="stat bg-base-200 rounded-lg p-4">
+                        <div class="stat-title text-xs">Files Changed</div>
+                        <div class="stat-value text-2xl">{{ metrics.files_changed }}</div>
+                    </div>
+                    <div class="stat bg-base-200 rounded-lg p-4">
+                        <div class="stat-title text-xs">Lines Added</div>
+                        <div class="stat-value text-2xl text-success">+{{ metrics.lines_added }}</div>
+                    </div>
+                    <div class="stat bg-base-200 rounded-lg p-4">
+                        <div class="stat-title text-xs">Lines Removed</div>
+                        <div class="stat-value text-2xl text-error">-{{ metrics.lines_removed }}</div>
+                    </div>
+                    <div class="stat bg-base-200 rounded-lg p-4">
+                        <div class="stat-title text-xs">Commits</div>
+                        <div class="stat-value text-2xl">{{ metrics.commits_on_branch }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card bg-base-100 shadow mt-6">
+        <div class="card-body">
+            <h2 class="card-title text-lg">Chat</h2>
+            <div id="chat-history" class="space-y-3 max-h-96 overflow-y-auto">
+                {% for msg in chat_messages %}
+                <div class="chat {{ msg.role }}">
+                    <div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %}">
+                        <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
+                            {{ msg.content }}
+                        </div>
+                        <div class="chat-footer text-xs text-base-content/50">{{ msg.timestamp }}</div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <form hx-post="/review/{{ session_id }}/summary/chat"
+                  hx-target="#chat-history"
+                  hx-swap="beforeend"
+                  hx-on::after-request="this.reset(); document.getElementById('chat-history').scrollTop = document.getElementById('chat-history').scrollHeight"
+                  hx-indicator="#chat-spinner"
+                  class="flex gap-2 mt-4">
+                <input type="text"
+                       name="message"
+                       placeholder="Ask a question about the changes..."
+                       class="input input-bordered flex-1"
+                       required
+                       autocomplete="off" />
+                <button type="submit" class="btn btn-primary">Send</button>
+                <span id="chat-spinner" class="loading loading-spinner htmx-indicator"></span>
+            </form>
+        </div>
+    </div>
+
+    <div class="mt-6">
+        <button class="btn btn-primary w-full btn-lg" disabled>
+            Start Review (coming soon)
+        </button>
+    </div>
+</div>
+{% endblock %}

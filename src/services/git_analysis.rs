@@ -11,6 +11,7 @@ pub struct GitAnalysis {
     pub merge_base: String,
     pub diff: String,
     pub changed_files: Vec<ChangedFile>,
+    pub commit_count: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -148,6 +149,29 @@ fn detect_default_branch(path: &Path) -> Result<String, GitAnalysisError> {
     Err(GitAnalysisError::NoDefaultBranch)
 }
 
+fn count_commits(path: &Path, range: &str) -> Result<usize, GitAnalysisError> {
+    let output = run_git(path, &["rev-list", "--count", range])?;
+    output
+        .parse::<usize>()
+        .map_err(|_| GitAnalysisError::GitCommandFailed {
+            command: "git rev-list --count".to_string(),
+            stderr: format!("Could not parse commit count: {output}"),
+        })
+}
+
+pub fn compute_diff_line_stats(diff: &str) -> (usize, usize) {
+    let mut added = 0;
+    let mut removed = 0;
+    for line in diff.lines() {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            added += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            removed += 1;
+        }
+    }
+    (added, removed)
+}
+
 pub fn analyze_repo(path: &Path) -> Result<GitAnalysis, GitAnalysisError> {
     let canonical = path
         .canonicalize()
@@ -183,6 +207,8 @@ pub fn analyze_repo(path: &Path) -> Result<GitAnalysis, GitAnalysisError> {
         .filter_map(parse_name_status_line)
         .collect();
 
+    let commit_count = count_commits(&canonical, &diff_range)?;
+
     Ok(GitAnalysis {
         repo_path: canonical.to_string_lossy().to_string(),
         current_branch,
@@ -190,6 +216,7 @@ pub fn analyze_repo(path: &Path) -> Result<GitAnalysis, GitAnalysisError> {
         merge_base,
         diff,
         changed_files,
+        commit_count,
     })
 }
 
@@ -264,6 +291,29 @@ mod tests {
         assert_eq!(files[0].status, FileStatus::Added);
         assert_eq!(files[1].status, FileStatus::Modified);
         assert_eq!(files[2].status, FileStatus::Deleted);
+    }
+
+    #[test]
+    fn test_compute_diff_line_stats_basic() {
+        let diff = "diff --git a/file.rs b/file.rs\n--- a/file.rs\n+++ b/file.rs\n@@ -1,3 +1,4 @@\n line1\n+added line\n line2\n-removed line\n line3\n";
+        let (added, removed) = compute_diff_line_stats(diff);
+        assert_eq!(added, 1);
+        assert_eq!(removed, 1);
+    }
+
+    #[test]
+    fn test_compute_diff_line_stats_empty() {
+        let (added, removed) = compute_diff_line_stats("");
+        assert_eq!(added, 0);
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_compute_diff_line_stats_ignores_headers() {
+        let diff = "--- a/file.rs\n+++ b/file.rs\n+real addition\n";
+        let (added, removed) = compute_diff_line_stats(diff);
+        assert_eq!(added, 1);
+        assert_eq!(removed, 0);
     }
 
     #[test]

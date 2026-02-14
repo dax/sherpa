@@ -1,0 +1,172 @@
+use std::time::Duration;
+
+use tokio::process::Command;
+
+use super::cli_detection::AiCli;
+
+const DEFAULT_TIMEOUT_SECS: u64 = 120;
+
+#[derive(Debug)]
+pub struct AiPrompt {
+    pub context: String,
+    pub instruction: String,
+}
+
+impl AiPrompt {
+    pub fn full_prompt(&self) -> String {
+        format!("{}\n\n{}", self.context, self.instruction)
+    }
+}
+
+#[derive(Debug)]
+pub enum AiCliError {
+    SpawnFailed(std::io::Error),
+    CliFailure { stderr: String },
+    Timeout,
+}
+
+impl std::fmt::Display for AiCliError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SpawnFailed(e) => write!(f, "Failed to start AI CLI: {e}"),
+            Self::CliFailure { stderr } => write!(f, "AI CLI error: {stderr}"),
+            Self::Timeout => write!(f, "AI request timed out"),
+        }
+    }
+}
+
+impl std::error::Error for AiCliError {}
+
+pub async fn generate(cli: AiCli, prompt: &AiPrompt) -> Result<String, AiCliError> {
+    generate_with_timeout(cli, prompt, Duration::from_secs(DEFAULT_TIMEOUT_SECS)).await
+}
+
+pub async fn generate_with_timeout(
+    cli: AiCli,
+    prompt: &AiPrompt,
+    timeout: Duration,
+) -> Result<String, AiCliError> {
+    let full_prompt = prompt.full_prompt();
+
+    let fut = async move {
+        let output = match cli {
+            AiCli::Claude => Command::new("claude")
+                .args(["--print", &full_prompt])
+                .output()
+                .await
+                .map_err(AiCliError::SpawnFailed)?,
+            AiCli::Opencode => Command::new("opencode")
+                .args(["run", &full_prompt])
+                .output()
+                .await
+                .map_err(AiCliError::SpawnFailed)?,
+        };
+
+        if !output.status.success() {
+            return Err(AiCliError::CliFailure {
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            });
+        }
+
+        Ok::<String, AiCliError>(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    };
+
+    tokio::time::timeout(timeout, fut)
+        .await
+        .map_err(|_| AiCliError::Timeout)?
+}
+
+pub fn build_context(
+    branch: &str,
+    default_branch: &str,
+    changed_files_summary: &str,
+    diff: &str,
+) -> String {
+    // Truncate diff if it's very large to avoid CLI argument limits
+    let max_diff_len = 80_000;
+    let diff_section = if diff.len() > max_diff_len {
+        let truncated = &diff[..max_diff_len];
+        format!("{truncated}\n\n... (diff truncated, {total} total characters)", total = diff.len())
+    } else {
+        diff.to_string()
+    };
+
+    format!(
+        "You are reviewing code changes on branch `{branch}` against `{default_branch}`.\n\
+         \n\
+         Changed files:\n\
+         {changed_files_summary}\n\
+         \n\
+         Diff:\n\
+         ```\n\
+         {diff_section}\n\
+         ```"
+    )
+}
+
+pub fn overview_instruction() -> &'static str {
+    "Based on the repository structure and changed files, write a 2-3 paragraph summary of \
+     what this project is about and which area these changes affect. Be concise and specific."
+}
+
+pub fn changes_instruction() -> &'static str {
+    "Summarize what changed in this branch in 3-5 bullet points. Focus on what was added, \
+     modified, or removed. Be specific about file names and the purpose of each change."
+}
+
+pub fn approach_instruction() -> &'static str {
+    "Describe the implementation approach taken in these changes in 2-3 paragraphs. Note any \
+     design patterns, architectural decisions, or trade-offs. Mention potential concerns if any."
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ai_prompt_full_prompt() {
+        let prompt = AiPrompt {
+            context: "You are reviewing code.".to_string(),
+            instruction: "Summarize the changes.".to_string(),
+        };
+        let full = prompt.full_prompt();
+        assert!(full.contains("You are reviewing code."));
+        assert!(full.contains("Summarize the changes."));
+        assert!(full.contains("\n\n"));
+    }
+
+    #[test]
+    fn test_build_context_normal() {
+        let ctx = build_context("feature-x", "main", "M\tsrc/lib.rs", "diff content");
+        assert!(ctx.contains("feature-x"));
+        assert!(ctx.contains("main"));
+        assert!(ctx.contains("src/lib.rs"));
+        assert!(ctx.contains("diff content"));
+    }
+
+    #[test]
+    fn test_build_context_truncates_large_diff() {
+        let large_diff = "x".repeat(100_000);
+        let ctx = build_context("feature-x", "main", "M\tsrc/lib.rs", &large_diff);
+        assert!(ctx.contains("truncated"));
+        assert!(ctx.contains("100000 total characters"));
+    }
+
+    #[test]
+    fn test_error_display() {
+        let err = AiCliError::Timeout;
+        assert_eq!(err.to_string(), "AI request timed out");
+
+        let err = AiCliError::CliFailure {
+            stderr: "some error".to_string(),
+        };
+        assert!(err.to_string().contains("some error"));
+    }
+
+    #[test]
+    fn test_instruction_strings_not_empty() {
+        assert!(!overview_instruction().is_empty());
+        assert!(!changes_instruction().is_empty());
+        assert!(!approach_instruction().is_empty());
+    }
+}

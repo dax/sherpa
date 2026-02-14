@@ -5,7 +5,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::git_analysis::{ChangedFile, GitAnalysis};
+use super::git_analysis::{self, ChangedFile, GitAnalysis};
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SummaryData {
+    pub overview: Option<String>,
+    pub changes: Option<String>,
+    pub approach: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+    pub timestamp: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewSession {
@@ -17,6 +31,20 @@ pub struct ReviewSession {
     pub diff: String,
     pub changed_files: Vec<ChangedFile>,
     pub created_at: String,
+    #[serde(default)]
+    pub summary: SummaryData,
+    #[serde(default)]
+    pub chat_messages: Vec<ChatMessage>,
+    #[serde(default)]
+    pub metrics: DiffMetrics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DiffMetrics {
+    pub files_changed: usize,
+    pub lines_added: usize,
+    pub lines_removed: usize,
+    pub commits_on_branch: usize,
 }
 
 impl ReviewSession {
@@ -42,6 +70,14 @@ impl ReviewSession {
             )
         };
 
+        let (lines_added, lines_removed) = git_analysis::compute_diff_line_stats(&analysis.diff);
+        let metrics = DiffMetrics {
+            files_changed: analysis.changed_files.len(),
+            lines_added,
+            lines_removed,
+            commits_on_branch: analysis.commit_count,
+        };
+
         Self {
             id,
             repo_path: analysis.repo_path,
@@ -51,6 +87,9 @@ impl ReviewSession {
             diff: analysis.diff,
             changed_files: analysis.changed_files,
             created_at,
+            summary: SummaryData::default(),
+            chat_messages: Vec::new(),
+            metrics,
         }
     }
 
@@ -145,6 +184,7 @@ mod tests {
                 path: "file.rs".to_string(),
                 status: FileStatus::Modified,
             }],
+            commit_count: 3,
         }
     }
 

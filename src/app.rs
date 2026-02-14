@@ -52,6 +52,8 @@ impl Hooks for App {
             .add_route(controllers::cli::api_routes())
             .add_route(controllers::repo::page_routes())
             .add_route(controllers::repo::api_routes())
+            .add_route(controllers::review::page_routes())
+            .add_route(controllers::review::api_routes())
     }
     async fn connect_workers(_ctx: &AppContext, _queue: &Queue) -> Result<()> {
         Ok(())

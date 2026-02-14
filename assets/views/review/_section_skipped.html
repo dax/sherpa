@@ -1,0 +1,16 @@
+<div id="{{ section_id }}-section" class="card bg-base-100 shadow opacity-60">
+    <div class="card-body">
+        <h2 class="card-title text-lg">{{ title }}</h2>
+        <p class="text-base-content/50 italic mt-2">AI analysis skipped</p>
+        <div class="mt-2">
+            <button hx-get="{{ retry_url }}"
+                    hx-target="#{{ section_id }}-section"
+                    hx-swap="outerHTML"
+                    hx-indicator="#{{ section_id }}-retry-spinner"
+                    class="btn btn-sm btn-ghost btn-xs">
+                <span id="{{ section_id }}-retry-spinner" class="loading loading-spinner loading-xs htmx-indicator"></span>
+                Click to retry
+            </button>
+        </div>
+    </div>
+</div>
