@@ -75,10 +75,59 @@ async fn summary_page(
     ViewEngine(v): ViewEngine<TeraView>,
     Path(session_id): Path<String>,
 ) -> Result<Response> {
-    let session = ReviewSession::load(&session_id).map_err(|e| {
+    let mut session = ReviewSession::load(&session_id).map_err(|e| {
         tracing::error!("Failed to load session {session_id}: {e}");
         Error::NotFound
     })?;
+
+    session.ensure_validated_steps_size();
+
+    let all_validated = !session.validated_steps.is_empty()
+        && session.validated_steps.iter().all(|&v| v);
+
+    let reviewed_steps: Vec<serde_json::Value> = if all_validated {
+        if let Some(ref plan) = session.review_plan {
+            plan.steps
+                .iter()
+                .enumerate()
+                .map(|(i, step)| {
+                    let step_number = i + 1;
+                    let files: Vec<String> =
+                        step.file_refs.iter().map(|f| f.path.clone()).collect();
+                    let explanation = step
+                        .ai_data
+                        .explanation
+                        .clone()
+                        .unwrap_or_default();
+                    let step_chat: Vec<serde_json::Value> = session
+                        .chat_messages
+                        .iter()
+                        .filter(|msg| msg.step_number == Some(step_number))
+                        .map(|msg| {
+                            serde_json::json!({
+                                "role": msg.role,
+                                "content": msg.content,
+                                "timestamp": msg.timestamp,
+                            })
+                        })
+                        .collect();
+                    serde_json::json!({
+                        "number": step_number,
+                        "title": step.title,
+                        "rationale": step.rationale,
+                        "files": files,
+                        "explanation": explanation,
+                        "chat_messages": step_chat,
+                        "has_chat": !step_chat.is_empty(),
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
 
     format::render().view(
         &v,
@@ -89,6 +138,8 @@ async fn summary_page(
             "default_branch": session.default_branch,
             "metrics": session.metrics,
             "chat_messages": session.chat_messages,
+            "all_validated": all_validated,
+            "reviewed_steps": reviewed_steps,
         }),
     )
 }
@@ -983,7 +1034,11 @@ async fn step_validate(
     session.validated_steps[step_number - 1] = true;
     let _ = session.save();
 
-    if step_number < total_steps {
+    let all_validated = session.validated_steps.iter().all(|&v| v);
+
+    if all_validated {
+        format::render().redirect(&format!("/review/{session_id}/summary"))
+    } else if step_number < total_steps {
         format::render().redirect(&format!("/review/{session_id}/guide/step/{}", step_number + 1))
     } else {
         format::render().redirect(&format!("/review/{session_id}/guide"))

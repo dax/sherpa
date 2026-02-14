@@ -867,3 +867,215 @@ async fn validation_state_persists_across_loads() {
 
     cleanup_session(&session_id);
 }
+
+#[tokio::test]
+#[serial]
+async fn validate_all_steps_redirects_to_summary() {
+    let mut session = create_session_with_plan();
+    session.validated_steps = vec![true, false];
+    session.save().expect("save session with first step validated");
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .post(&format!("/review/{session_id}/guide/step/2/validate"))
+            .await;
+
+        let status = res.status_code();
+        assert!(
+            status == 200 || status == 303 || status == 302,
+            "should redirect to summary page, got {status}"
+        );
+
+        let loaded = ReviewSession::load(&session_id).unwrap();
+        assert!(loaded.validated_steps[0], "step 1 should still be validated");
+        assert!(loaded.validated_steps[1], "step 2 should be validated");
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn summary_page_shows_review_complete_banner() {
+    let mut session = create_session_with_plan();
+    session.validated_steps = vec![true, true];
+    session.save().expect("save fully validated session");
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/summary"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(
+            body.contains("Review Complete"),
+            "should show Review Complete banner"
+        );
+        assert!(
+            body.contains("all changes reviewed"),
+            "banner should confirm all changes reviewed"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn summary_page_shows_reviewed_changes_section() {
+    let mut session = create_session_with_plan();
+    session.validated_steps = vec![true, true];
+    session.save().expect("save fully validated session");
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/summary"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(
+            body.contains("Reviewed Changes"),
+            "should show Reviewed Changes section"
+        );
+        assert!(
+            body.contains("Core data models"),
+            "should show step 1 title"
+        );
+        assert!(
+            body.contains("New feature code"),
+            "should show step 2 title"
+        );
+        assert!(
+            body.contains("collapse"),
+            "steps should be collapsible"
+        );
+        assert!(
+            body.contains("lib.rs"),
+            "should show file references"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn summary_page_hides_start_review_when_complete() {
+    let mut session = create_session_with_plan();
+    session.validated_steps = vec![true, true];
+    session.save().expect("save fully validated session");
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/summary"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(
+            !body.contains("Start Review"),
+            "should not show Start Review when review is complete"
+        );
+        assert!(
+            body.contains("View Review Guide"),
+            "should show link to review guide instead"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn summary_page_no_reviewed_changes_when_incomplete() {
+    let session = create_test_session();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/summary"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(
+            !body.contains("Review Complete"),
+            "should not show Review Complete when review is not done"
+        );
+        assert!(
+            !body.contains("Reviewed Changes"),
+            "should not show Reviewed Changes when review is not done"
+        );
+        assert!(
+            body.contains("Start Review"),
+            "should still show Start Review button"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn summary_page_shows_step_chat_messages() {
+    use sherpa::services::review_session::ChatMessage;
+
+    let mut session = create_session_with_plan();
+    session.validated_steps = vec![true, true];
+    session.chat_messages = vec![
+        ChatMessage {
+            role: "user".to_string(),
+            content: "What does this change do?".to_string(),
+            timestamp: "10:00:00".to_string(),
+            step_number: Some(1),
+        },
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: "It modifies the core models.".to_string(),
+            timestamp: "10:00:05".to_string(),
+            step_number: Some(1),
+        },
+    ];
+    session.save().expect("save session with chat");
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/summary"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+
+        let body = res.text();
+        assert!(
+            body.contains("What does this change do?"),
+            "should show step chat user message"
+        );
+        assert!(
+            body.contains("It modifies the core models."),
+            "should show step chat AI response"
+        );
+        assert!(
+            body.contains("Chat Messages"),
+            "should show Chat Messages heading in step card"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
