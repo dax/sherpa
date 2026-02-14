@@ -1,0 +1,53 @@
+<div class="alert alert-info mt-4" role="alert">
+    <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+    </svg>
+    <span>A previous review was found for this branch.</span>
+</div>
+
+{% if merge_base_changed %}
+<div class="alert alert-warning mt-2" role="alert">
+    <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+    </svg>
+    <span>Branch has changed since last review — resume may be outdated.</span>
+</div>
+{% endif %}
+
+<div class="mt-4 space-y-2 text-sm">
+    <div class="flex justify-between">
+        <span class="text-base-content/70">Branch</span>
+        <span class="font-semibold font-mono">{{ branch }}</span>
+    </div>
+    <div class="flex justify-between">
+        <span class="text-base-content/70">Default Branch</span>
+        <span class="font-semibold font-mono">{{ default_branch }}</span>
+    </div>
+    {% if has_plan %}
+    <div class="flex justify-between">
+        <span class="text-base-content/70">Progress</span>
+        <span class="font-semibold">{{ validated_count }}/{{ total_steps }} steps validated</span>
+    </div>
+    {% endif %}
+</div>
+
+<div class="mt-6 space-y-2">
+    <form hx-post="/repo/resume/{{ session_id }}"
+          hx-target="body"
+          hx-push-url="true">
+        <button type="submit" class="btn btn-primary w-full">
+            Resume Previous Review
+        </button>
+    </form>
+
+    <form hx-post="/repo/fresh"
+          hx-target="#repo-feedback"
+          hx-swap="innerHTML"
+          hx-indicator="#loading-spinner">
+        <input type="hidden" name="repo_path" value="{{ repo_path }}" />
+        <input type="hidden" name="branch" value="{{ branch }}" />
+        <button type="submit" class="btn btn-outline w-full">
+            Start Fresh
+        </button>
+    </form>
+</div>

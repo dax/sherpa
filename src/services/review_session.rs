@@ -170,6 +170,9 @@ impl ReviewSession {
         file.sync_all().map_err(SessionError::Io)?;
         fs::rename(&tmp_path, &file_path).map_err(SessionError::Io)?;
 
+        // Best-effort write to repo-local .sherpa/ directory
+        let _ = self.save_to_repo();
+
         Ok(())
     }
 
@@ -185,6 +188,41 @@ impl ReviewSession {
         }
         let content = fs::read_to_string(path).map_err(SessionError::Io)?;
         serde_json::from_str(&content).map_err(SessionError::Parse)
+    }
+
+    pub fn save_to_repo(&self) -> Result<(), SessionError> {
+        let file_path = repo_session_path(&self.repo_path, &self.branch);
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).map_err(SessionError::Io)?;
+        }
+
+        let content = serde_json::to_string_pretty(self).map_err(SessionError::Serialize)?;
+        let tmp_path = file_path.with_extension("json.tmp");
+        let mut file = fs::File::create(&tmp_path).map_err(SessionError::Io)?;
+        file.write_all(content.as_bytes())
+            .map_err(SessionError::Io)?;
+        file.sync_all().map_err(SessionError::Io)?;
+        fs::rename(&tmp_path, &file_path).map_err(SessionError::Io)?;
+
+        Ok(())
+    }
+
+    pub fn find_existing(repo_path: &str, branch: &str) -> Option<Self> {
+        let path = repo_session_path(repo_path, branch);
+        Self::load_from(&path).ok()
+    }
+
+    pub fn delete_repo_session(repo_path: &str, branch: &str) -> Result<(), SessionError> {
+        let path = repo_session_path(repo_path, branch);
+        if path.exists() {
+            fs::remove_file(&path).map_err(SessionError::Io)?;
+        }
+        Ok(())
+    }
+
+    pub fn first_unvalidated_step(&self) -> Option<usize> {
+        self.review_plan.as_ref()?;
+        self.validated_steps.iter().position(|&v| !v).map(|i| i + 1)
     }
 }
 
@@ -255,6 +293,27 @@ impl std::fmt::Display for SessionError {
 }
 
 impl std::error::Error for SessionError {}
+
+/// Sanitize a git branch name for use as a filename.
+///
+/// Replaces `/` with `--` and strips characters that are invalid in filenames.
+pub fn sanitize_branch_name(branch: &str) -> String {
+    branch
+        .replace('/', "--")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
+        .collect()
+}
+
+/// Return the path to a repo-local session file for the given repo+branch.
+///
+/// The session is stored at `{repo_path}/.sherpa/review-{sanitized_branch}.json`.
+pub fn repo_session_path(repo_path: &str, branch: &str) -> PathBuf {
+    let sanitized = sanitize_branch_name(branch);
+    Path::new(repo_path)
+        .join(".sherpa")
+        .join(format!("review-{sanitized}.json"))
+}
 
 #[cfg(test)]
 mod tests {
@@ -425,5 +484,157 @@ mod tests {
         assert_eq!(plan.steps[0].title, "Test step");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_sanitize_branch_name_simple() {
+        assert_eq!(sanitize_branch_name("main"), "main");
+        assert_eq!(sanitize_branch_name("feature-branch"), "feature-branch");
+    }
+
+    #[test]
+    fn test_sanitize_branch_name_with_slashes() {
+        assert_eq!(sanitize_branch_name("feature/auth"), "feature--auth");
+        assert_eq!(
+            sanitize_branch_name("feature/auth/oauth"),
+            "feature--auth--oauth"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_branch_name_strips_invalid_chars() {
+        assert_eq!(sanitize_branch_name("feat:test"), "feattest");
+        assert_eq!(sanitize_branch_name("my branch"), "mybranch");
+    }
+
+    #[test]
+    fn test_repo_session_path_structure() {
+        let path = repo_session_path("/tmp/my-repo", "feature/auth");
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/my-repo/.sherpa/review-feature--auth.json")
+        );
+    }
+
+    #[test]
+    fn test_save_to_repo_and_find_existing_roundtrip() {
+        let dir = std::env::temp_dir().join("sherpa_test_repo_local");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut analysis = make_test_analysis();
+        analysis.repo_path = dir.to_string_lossy().to_string();
+        let session = ReviewSession::new(analysis);
+        session.save_to_repo().unwrap();
+
+        let found = ReviewSession::find_existing(&dir.to_string_lossy(), "feature-branch");
+        assert!(found.is_some());
+        let found = found.unwrap();
+        assert_eq!(found.id, session.id);
+        assert_eq!(found.branch, "feature-branch");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_find_existing_returns_none_for_missing() {
+        let found = ReviewSession::find_existing("/tmp/sherpa_nonexistent_repo", "no-branch");
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_delete_repo_session() {
+        let dir = std::env::temp_dir().join("sherpa_test_delete_repo");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut analysis = make_test_analysis();
+        analysis.repo_path = dir.to_string_lossy().to_string();
+        let session = ReviewSession::new(analysis);
+        session.save_to_repo().unwrap();
+
+        let path = repo_session_path(&dir.to_string_lossy(), "feature-branch");
+        assert!(path.exists());
+
+        ReviewSession::delete_repo_session(&dir.to_string_lossy(), "feature-branch").unwrap();
+        assert!(!path.exists());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_delete_repo_session_noop_for_missing() {
+        let result = ReviewSession::delete_repo_session("/tmp/sherpa_nonexistent", "no-branch");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_first_unvalidated_step_no_plan() {
+        let session = ReviewSession::new(make_test_analysis());
+        assert_eq!(session.first_unvalidated_step(), None);
+    }
+
+    #[test]
+    fn test_first_unvalidated_step_all_false() {
+        let mut session = ReviewSession::new(make_test_analysis());
+        session.review_plan = Some(ReviewPlan {
+            steps: vec![
+                ReviewStep {
+                    title: "Step 1".to_string(),
+                    rationale: "r".to_string(),
+                    file_refs: vec![],
+                    ai_data: StepAiData::default(),
+                },
+                ReviewStep {
+                    title: "Step 2".to_string(),
+                    rationale: "r".to_string(),
+                    file_refs: vec![],
+                    ai_data: StepAiData::default(),
+                },
+            ],
+            generated_at: "now".to_string(),
+        });
+        session.validated_steps = vec![false, false];
+        assert_eq!(session.first_unvalidated_step(), Some(1));
+    }
+
+    #[test]
+    fn test_first_unvalidated_step_partial() {
+        let mut session = ReviewSession::new(make_test_analysis());
+        session.review_plan = Some(ReviewPlan {
+            steps: vec![
+                ReviewStep {
+                    title: "Step 1".to_string(),
+                    rationale: "r".to_string(),
+                    file_refs: vec![],
+                    ai_data: StepAiData::default(),
+                },
+                ReviewStep {
+                    title: "Step 2".to_string(),
+                    rationale: "r".to_string(),
+                    file_refs: vec![],
+                    ai_data: StepAiData::default(),
+                },
+            ],
+            generated_at: "now".to_string(),
+        });
+        session.validated_steps = vec![true, false];
+        assert_eq!(session.first_unvalidated_step(), Some(2));
+    }
+
+    #[test]
+    fn test_first_unvalidated_step_all_validated() {
+        let mut session = ReviewSession::new(make_test_analysis());
+        session.review_plan = Some(ReviewPlan {
+            steps: vec![ReviewStep {
+                title: "Step 1".to_string(),
+                rationale: "r".to_string(),
+                file_refs: vec![],
+                ai_data: StepAiData::default(),
+            }],
+            generated_at: "now".to_string(),
+        });
+        session.validated_steps = vec![true];
+        assert_eq!(session.first_unvalidated_step(), None);
     }
 }

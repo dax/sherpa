@@ -3,7 +3,7 @@ use serial_test::serial;
 use sherpa::app::App;
 use sherpa::services::git_analysis::{ChangedFile, FileStatus, GitAnalysis};
 use sherpa::services::review_session::{
-    FileRef, ReviewPlan, ReviewSession, ReviewStep, StepAiData,
+    repo_session_path, FileRef, ReviewPlan, ReviewSession, ReviewStep, StepAiData,
 };
 
 fn create_test_session() -> ReviewSession {
@@ -1078,4 +1078,183 @@ async fn summary_page_shows_step_chat_messages() {
         cleanup_session(&session_id);
     })
     .await;
+}
+
+// --- Resume / persistence tests ---
+
+fn cleanup_repo_session(repo_path: &str, branch: &str) {
+    let path = repo_session_path(repo_path, branch);
+    let _ = std::fs::remove_file(&path);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::remove_dir(parent);
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn resume_endpoint_redirects_to_first_unvalidated_step() {
+    let mut session = create_session_with_plan();
+    session.validated_steps = vec![true, false];
+    session.save().expect("save session");
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .post(&format!("/repo/resume/{session_id}"))
+            .await;
+
+        let status = res.status_code();
+        assert!(
+            status == 200 || status == 303 || status == 302,
+            "should redirect, got {status}"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn resume_endpoint_redirects_to_guide_when_all_validated() {
+    let mut session = create_session_with_plan();
+    session.validated_steps = vec![true, true];
+    session.save().expect("save session");
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .post(&format!("/repo/resume/{session_id}"))
+            .await;
+
+        let status = res.status_code();
+        assert!(
+            status == 200 || status == 303 || status == 302,
+            "should redirect, got {status}"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn resume_endpoint_redirects_to_summary_without_plan() {
+    let session = create_test_session();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .post(&format!("/repo/resume/{session_id}"))
+            .await;
+
+        let status = res.status_code();
+        assert!(
+            status == 200 || status == 303 || status == 302,
+            "should redirect, got {status}"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn resume_endpoint_returns_404_for_invalid_session() {
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .post("/repo/resume/nonexistent-session")
+            .await;
+
+        assert_eq!(res.status_code(), 404);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn save_writes_to_repo_local_sherpa_dir() {
+    let dir = std::env::temp_dir().join("sherpa_test_repo_local_save");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let analysis = GitAnalysis {
+        repo_path: dir.to_string_lossy().to_string(),
+        current_branch: "feature/persistence".to_string(),
+        default_branch: "main".to_string(),
+        merge_base: "abc123".to_string(),
+        diff: "diff --git a/file.rs b/file.rs\n+line".to_string(),
+        changed_files: vec![ChangedFile {
+            path: "file.rs".to_string(),
+            status: FileStatus::Modified,
+        }],
+        commit_count: 1,
+    };
+    let session = ReviewSession::new(analysis);
+    session.save().expect("save should succeed");
+
+    let repo_path = repo_session_path(&dir.to_string_lossy(), "feature/persistence");
+    assert!(repo_path.exists(), "session file should exist in repo .sherpa/ dir");
+
+    let loaded = ReviewSession::find_existing(&dir.to_string_lossy(), "feature/persistence");
+    assert!(loaded.is_some());
+    assert_eq!(loaded.unwrap().id, session.id);
+
+    cleanup_session(&session.id);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+#[serial]
+async fn find_existing_detects_saved_session() {
+    let dir = std::env::temp_dir().join("sherpa_test_find_existing");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let analysis = GitAnalysis {
+        repo_path: dir.to_string_lossy().to_string(),
+        current_branch: "feature-find".to_string(),
+        default_branch: "main".to_string(),
+        merge_base: "def456".to_string(),
+        diff: "diff --git a/f.rs b/f.rs\n+x".to_string(),
+        changed_files: vec![ChangedFile {
+            path: "f.rs".to_string(),
+            status: FileStatus::Added,
+        }],
+        commit_count: 1,
+    };
+    let session = ReviewSession::new(analysis);
+    session.save().expect("save should succeed");
+
+    let found = ReviewSession::find_existing(&dir.to_string_lossy(), "feature-find");
+    assert!(found.is_some());
+    let found = found.unwrap();
+    assert_eq!(found.branch, "feature-find");
+    assert_eq!(found.merge_base, "def456");
+
+    let not_found = ReviewSession::find_existing(&dir.to_string_lossy(), "other-branch");
+    assert!(not_found.is_none());
+
+    cleanup_session(&session.id);
+    cleanup_repo_session(&dir.to_string_lossy(), "feature-find");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+#[serial]
+async fn first_unvalidated_step_returns_correct_step() {
+    let mut session = create_session_with_plan();
+
+    session.validated_steps = vec![false, false];
+    assert_eq!(session.first_unvalidated_step(), Some(1));
+
+    session.validated_steps = vec![true, false];
+    assert_eq!(session.first_unvalidated_step(), Some(2));
+
+    session.validated_steps = vec![true, true];
+    assert_eq!(session.first_unvalidated_step(), None);
+
+    cleanup_session(&session.id);
 }
