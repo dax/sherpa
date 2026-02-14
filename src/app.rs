@@ -9,9 +9,12 @@ use loco_rs::{
     task::Tasks,
     Result,
 };
+use migration::Migrator;
+use sea_orm::EntityTrait;
+use std::path::Path;
 
 #[allow(unused_imports)]
-use crate::{controllers, initializers, tasks};
+use crate::{controllers, initializers, models::_entities, tasks};
 
 pub struct App;
 #[async_trait]
@@ -35,7 +38,7 @@ impl Hooks for App {
         environment: &Environment,
         config: Config,
     ) -> Result<BootResult> {
-        create_app::<Self>(mode, environment, config).await
+        create_app::<Self, Migrator>(mode, environment, config).await
     }
 
     async fn initializers(_ctx: &AppContext) -> Result<Vec<Box<dyn Initializer>>> {
@@ -62,5 +65,22 @@ impl Hooks for App {
     #[allow(unused_variables)]
     fn register_tasks(tasks: &mut Tasks) {
         // tasks-inject (do not remove)
+    }
+
+    async fn truncate(ctx: &AppContext) -> Result<()> {
+        _entities::chat_messages::Entity::delete_many()
+            .exec(&ctx.db)
+            .await?;
+        _entities::ai_analyses::Entity::delete_many()
+            .exec(&ctx.db)
+            .await?;
+        _entities::review_sessions::Entity::delete_many()
+            .exec(&ctx.db)
+            .await?;
+        Ok(())
+    }
+
+    async fn seed(_ctx: &AppContext, _base: &Path) -> Result<()> {
+        Ok(())
     }
 }

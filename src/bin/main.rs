@@ -1,7 +1,8 @@
 use loco_rs::cli;
+use migration::Migrator;
 use sherpa::app::App;
 
 #[tokio::main]
 async fn main() -> loco_rs::Result<()> {
-    cli::main::<App>().await
+    cli::main::<App, Migrator>().await
 }

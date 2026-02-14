@@ -33,6 +33,17 @@ server:
         path: "assets/static"
       fallback: "assets/static/404.html"
 
+database:
+  uri: "sqlite://sherpa_dev.sqlite?mode=rwc"
+  enable_logging: false
+  connect_timeout: 500
+  idle_timeout: 500
+  min_connections: 1
+  max_connections: 1
+  auto_migrate: true
+  dangerously_truncate: false
+  dangerously_recreate: false
+
 # Initializers Configuration
 # initializers:
 #  oauth2:
