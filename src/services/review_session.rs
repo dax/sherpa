@@ -19,6 +19,10 @@ pub struct ChatMessage {
     pub role: String,
     pub content: String,
     pub timestamp: String,
+    /// Which review step this message belongs to.
+    /// `None` for summary-level chat, `Some(n)` for step n.
+    #[serde(default)]
+    pub step_number: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

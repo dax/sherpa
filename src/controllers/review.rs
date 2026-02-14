@@ -247,6 +247,7 @@ async fn summary_chat(
         role: "user".to_string(),
         content: form.message.clone(),
         timestamp: chrono_now(),
+        step_number: None,
     };
     session.chat_messages.push(user_msg);
 
@@ -272,6 +273,7 @@ async fn summary_chat(
         role: "assistant".to_string(),
         content: ai_response,
         timestamp: chrono_now(),
+        step_number: None,
     };
     session.chat_messages.push(ai_msg);
     let _ = session.save();
@@ -491,6 +493,20 @@ async fn step_page(
         None
     };
 
+    let chat_messages: Vec<serde_json::Value> = session
+        .chat_messages
+        .iter()
+        .map(|msg| {
+            serde_json::json!({
+                "role": msg.role,
+                "content": msg.content,
+                "timestamp": msg.timestamp,
+                "step_number": msg.step_number,
+                "is_current_step": msg.step_number == Some(step_number),
+            })
+        })
+        .collect();
+
     format::render().view(
         &v,
         "review/step.html",
@@ -507,6 +523,7 @@ async fn step_page(
             "steps": steps_data,
             "has_previous": has_previous,
             "prev_step_title": prev_step_title,
+            "chat_messages": chat_messages,
         }),
     )
 }
@@ -801,6 +818,81 @@ async fn step_symbols(
 }
 
 #[debug_handler]
+async fn step_chat(
+    ViewEngine(v): ViewEngine<TeraView>,
+    Path((session_id, step_number)): Path<(String, usize)>,
+    Form(form): Form<ChatForm>,
+) -> Result<Response> {
+    let mut session = ReviewSession::load(&session_id).map_err(|e| {
+        tracing::error!("Failed to load session {session_id}: {e}");
+        Error::NotFound
+    })?;
+
+    let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
+    if step_number < 1 || step_number > plan.steps.len() {
+        return Err(Error::NotFound);
+    }
+
+    let idx = step_number - 1;
+    let step = &plan.steps[idx];
+    let step_title = step.title.clone();
+    let explanation = step
+        .ai_data
+        .explanation
+        .clone()
+        .unwrap_or_default();
+
+    let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
+        .file_refs
+        .iter()
+        .map(|f| (f.path.clone(), f.diff_lines))
+        .collect();
+    let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
+
+    let user_msg = ChatMessage {
+        role: "user".to_string(),
+        content: form.message.clone(),
+        timestamp: chrono_now(),
+        step_number: Some(step_number),
+    };
+    session.chat_messages.push(user_msg);
+
+    let cli = load_selected_cli();
+    let ai_response = if let Some(cli) = cli {
+        let context = build_ai_context(&session);
+        let instruction =
+            ai_cli::step_chat_instruction(&step_title, &step_diff, &explanation, &form.message);
+        let prompt = AiPrompt {
+            context,
+            instruction,
+        };
+        match ai_cli::generate(cli, &prompt).await {
+            Ok(response) => response,
+            Err(e) => format!("AI error: {e}"),
+        }
+    } else {
+        "No AI backend configured. Please set up an AI backend first.".to_string()
+    };
+
+    let ai_msg = ChatMessage {
+        role: "assistant".to_string(),
+        content: ai_response,
+        timestamp: chrono_now(),
+        step_number: Some(step_number),
+    };
+    session.chat_messages.push(ai_msg);
+    let _ = session.save();
+
+    let last_two: Vec<_> = session.chat_messages[session.chat_messages.len() - 2..].to_vec();
+
+    format::render().view(
+        &v,
+        "review/_step_chat_messages.html",
+        data!({"messages": last_two, "current_step": step_number}),
+    )
+}
+
+#[debug_handler]
 async fn step_section_skip(
     ViewEngine(v): ViewEngine<TeraView>,
     Path((session_id, step_number, section)): Path<(String, usize, String)>,
@@ -846,6 +938,7 @@ pub fn page_routes() -> Routes {
         .add("/{session_id}/guide/step/{step_number}/explanation", get(step_explanation))
         .add("/{session_id}/guide/step/{step_number}/relation", get(step_relation))
         .add("/{session_id}/guide/step/{step_number}/symbols", get(step_symbols))
+        .add("/{session_id}/guide/step/{step_number}/chat", post(step_chat))
         .add("/{session_id}/guide/step/{step_number}/skip/{section}", get(step_section_skip))
         .add("/{session_id}/guide", get(guide_page))
 }

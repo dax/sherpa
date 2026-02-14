@@ -83,6 +83,40 @@
                         <div id="diff-container" class="mt-2"></div>
                     </div>
                 </div>
+
+                <div class="card bg-base-100 shadow">
+                    <div class="card-body">
+                        <h2 class="card-title text-lg">Chat</h2>
+                        <div id="step-chat-history" class="space-y-3 max-h-96 overflow-y-auto">
+                            {% for msg in chat_messages %}
+                            <div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %} {% if msg.is_current_step %}{% else %}opacity-50{% endif %}">
+                                <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
+                                    {{ msg.content }}
+                                </div>
+                                <div class="chat-footer text-xs text-base-content/50">
+                                    {% if msg.step_number %}Step {{ msg.step_number }} &middot; {% endif %}{{ msg.timestamp }}
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+
+                        <form hx-post="/review/{{ session_id }}/guide/step/{{ step_number }}/chat"
+                              hx-target="#step-chat-history"
+                              hx-swap="beforeend"
+                              hx-on::after-request="this.reset(); document.getElementById('step-chat-history').scrollTop = document.getElementById('step-chat-history').scrollHeight"
+                              hx-indicator="#step-chat-spinner"
+                              class="flex gap-2 mt-4">
+                            <input type="text"
+                                   name="message"
+                                   placeholder="Ask about this step's changes..."
+                                   class="input input-bordered flex-1"
+                                   required
+                                   autocomplete="off" />
+                            <button type="submit" class="btn btn-primary">Send</button>
+                            <span id="step-chat-spinner" class="loading loading-spinner htmx-indicator"></span>
+                        </form>
+                    </div>
+                </div>
             </div>
 
             <div class="flex justify-between mt-6">
@@ -123,6 +157,11 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('diff-container').innerHTML = diffHtml;
     } else {
         document.getElementById('diff-container').innerHTML = '<p class="text-base-content/50 italic">No diff available for this step</p>';
+    }
+
+    var chatHistory = document.getElementById('step-chat-history');
+    if (chatHistory) {
+        chatHistory.scrollTop = chatHistory.scrollHeight;
     }
 });
 </script>

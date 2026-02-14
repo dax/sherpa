@@ -539,3 +539,126 @@ async fn step_page_sidebar_highlights_current_step() {
     })
     .await;
 }
+
+#[tokio::test]
+#[serial]
+async fn step_page_has_chat_panel() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide/step/1"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+        let body = res.text();
+        assert!(body.contains("Chat"), "should have chat section heading");
+        assert!(
+            body.contains("step-chat-history"),
+            "should have chat history container"
+        );
+        assert!(
+            body.contains("/guide/step/1/chat"),
+            "should have chat form posting to step chat endpoint"
+        );
+        assert!(
+            body.contains("Ask about this step"),
+            "should have step-specific placeholder text"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn step_page_shows_chat_history_with_highlighting() {
+    use sherpa::services::review_session::ChatMessage;
+
+    let mut session = create_session_with_plan();
+    session.chat_messages = vec![
+        ChatMessage {
+            role: "user".to_string(),
+            content: "Question about step 1".to_string(),
+            timestamp: "10:00:00".to_string(),
+            step_number: Some(1),
+        },
+        ChatMessage {
+            role: "assistant".to_string(),
+            content: "Answer about step 1".to_string(),
+            timestamp: "10:00:05".to_string(),
+            step_number: Some(1),
+        },
+        ChatMessage {
+            role: "user".to_string(),
+            content: "Question from summary".to_string(),
+            timestamp: "09:00:00".to_string(),
+            step_number: None,
+        },
+    ];
+    session.save().expect("save session with chat");
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .get(&format!("/review/{session_id}/guide/step/1"))
+            .await;
+
+        assert_eq!(res.status_code(), 200);
+        let body = res.text();
+        assert!(
+            body.contains("Question about step 1"),
+            "should show step 1 chat messages"
+        );
+        assert!(
+            body.contains("Answer about step 1"),
+            "should show AI response for step 1"
+        );
+        assert!(
+            body.contains("Question from summary"),
+            "should show messages from other contexts"
+        );
+        assert!(
+            body.contains("opacity-50"),
+            "non-current-step messages should be dimmed"
+        );
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn step_chat_returns_404_for_invalid_step() {
+    let session = create_session_with_plan();
+    let session_id = session.id.clone();
+
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .post(&format!("/review/{session_id}/guide/step/99/chat"))
+            .form(&[("message", "hello")])
+            .await;
+
+        assert_eq!(res.status_code(), 404);
+
+        cleanup_session(&session_id);
+    })
+    .await;
+}
+
+#[tokio::test]
+#[serial]
+async fn step_chat_returns_404_for_invalid_session() {
+    request::<App, _, _>(|request, _ctx| async move {
+        let res = request
+            .post("/review/nonexistent-session/guide/step/1/chat")
+            .form(&[("message", "hello")])
+            .await;
+
+        assert_eq!(res.status_code(), 404);
+    })
+    .await;
+}

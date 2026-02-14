@@ -179,6 +179,26 @@ pub fn step_symbols_instruction(step_diff: &str) -> String {
     )
 }
 
+pub fn step_chat_instruction(
+    step_title: &str,
+    step_diff: &str,
+    explanation: &str,
+    user_message: &str,
+) -> String {
+    let explanation_section = if explanation.is_empty() {
+        String::new()
+    } else {
+        format!("\nExplanation of this step:\n{explanation}\n")
+    };
+    format!(
+        "You are helping a reviewer who is on step \"{step_title}\".\n\n\
+         Diff for this step:\n```\n{step_diff}\n```\n\
+         {explanation_section}\n\
+         The reviewer asks: {user_message}\n\n\
+         Respond helpfully and concisely, referencing specific code from the diff when relevant."
+    )
+}
+
 pub fn extract_json_from_response(raw: &str) -> Result<String, String> {
     if serde_json::from_str::<serde_json::Value>(raw).is_ok() {
         return Ok(raw.to_string());
