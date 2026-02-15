@@ -9,16 +9,19 @@ css-watch:
     npm run css:watch
 
 # Build CSS + start server
-dev:
-    npm run build && cargo loco start
+dev: css-build
+    cargo loco start
+
+# cargo-watch server (auto-reload on save)
+server-watch:
+    cargo watch -x 'loco start' -w src -w config -w assets/views
 
 # Build CSS + cargo-watch (auto-reload on save)
-watch:
-    npm run build && cargo watch -x 'loco start' -w src -w config -w assets/views
+watch: css-build server-watch
 
 # Build CSS + cargo build
-build:
-    npm run build && cargo build
+build: css-build
+    cargo build
 
 # Run tests
 test:
@@ -41,8 +44,7 @@ fmt-check:
     cargo fmt --check
 
 # Run all quality gates (check + test + clippy)
-qa:
-    cargo check && cargo test && cargo clippy -- -D warnings
+qa: check test lint
 
 # Start all processes (server + CSS watcher)
 up:

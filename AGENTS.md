@@ -172,20 +172,55 @@ cargo fmt --check               # Formatting check
 just qa
 ```
 
-For UI changes, also verify in browser at `http://localhost:5150`.
+For UI changes, also verify in browser (see "Accessing the Application" below).
+
+## Accessing the Application
+
+The server port is configured via the `PORT` env var (set per-branch in `.local_envrc` by worktrunk, defaults to `5150`):
+
+```
+http://localhost:${PORT:-5150}
+```
+
+To check your current port: `echo $PORT` (requires direnv to have loaded `.envrc` → `.local_envrc`).
 
 ## Development Commands
 
 ```bash
-just dev         # Build CSS + start server (port 5150)
-just watch       # Build CSS + cargo-watch (auto-reload)
-just test        # cargo test
-just lint        # cargo clippy
-just fmt         # cargo fmt
-just qa          # check + test + clippy
-just css-build   # Build Tailwind CSS
-just css-watch   # Watch & rebuild CSS
-just up                           # Start all processes (server + CSS watcher)
+just dev           # Build CSS + start server (one-shot, no auto-reload)
+just watch         # Build CSS + cargo-watch (auto-reload)
+just server-watch  # cargo-watch server only (no CSS build)
+just test          # cargo test
+just lint          # cargo clippy
+just fmt           # cargo fmt
+just qa            # check + test + clippy
+just css-build     # Build Tailwind CSS
+just css-watch     # Watch & rebuild CSS
+```
+
+## Process Management
+
+All dev processes are orchestrated via **process-compose**, which delegates to `just` recipes (single source of truth for commands).
+
+```bash
+just up            # Start all processes (server + CSS build + CSS watcher)
+```
+
+Under the hood, `just up` runs `process-compose up`, which starts:
+- **server** — `just server-watch` (cargo-watch auto-reload, waits for css-build)
+- **css-build** — `just css-build` (one-shot Tailwind build, runs first)
+- **css-watch** — `just css-watch` (Tailwind watcher, starts after css-build)
+
+### Stopping / Restarting
+
+```bash
+# Stop all processes (from another terminal in the same direnv)
+process-compose down -p ${PROCESS_COMPOSE_PORT:-9999}
+
+# Restart a single process (e.g. after config change)
+process-compose restart server -p ${PROCESS_COMPOSE_PORT:-9999}
+
+# Or just Ctrl-C the `just up` terminal to stop everything
 ```
 
 ## Conventions

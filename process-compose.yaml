@@ -2,23 +2,23 @@ version: "0.5"
 
 processes:
   server:
-    command: cargo watch -x 'loco start' -w src -w config -w assets/views
+    command: just server-watch
     readiness_probe:
       http_get:
-        host: 127.0.0.1
-        port: 5150
-        path: /
+        host: localhost
+        port: ${PORT:-5150}
+        path: /_health
       initial_delay_seconds: 5
-      period_seconds: 5
+      period_seconds: 10
     depends_on:
       css-build:
         condition: process_completed_successfully
 
   css-build:
-    command: npm run build
+    command: just css-build
 
   css-watch:
-    command: npm run css:watch
+    command: just css-watch
     depends_on:
       css-build:
         condition: process_completed_successfully

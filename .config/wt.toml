@@ -1,0 +1,41 @@
+[post-create]
+copy = "wt step copy-ignored"
+env = """
+cat >> .local_envrc << EOF
+export PORT={{ ('sherpa-' ~ branch) | hash_port }}
+export PROCESS_COMPOSE_PORT={{ ('pc-' ~ branch) | hash_port }}
+export WORKTRUNK_ZELLIJ_SESSION="$(echo {{ branch | sanitize_db }} | cut -c -30)"
+EOF
+"""
+setup = "direnv allow"
+term = """
+SESSION_NAME="$(echo {{ branch | sanitize_db }} | cut -c -30)"
+
+zellij attach -b ${SESSION_NAME} options --default-layout .config/wt-zellij-layout.kdl
+"""
+
+[post-switch]
+term = """
+SESSION_NAME="$(echo {{ branch | sanitize_db }} | cut -c -30)"
+
+if ! zellij list-sessions -s | grep -v EXITED | grep -q "^${SESSION_NAME}\b"; then
+    zellij attach -b ${SESSION_NAME} options --default-layout .config/wt-zellij-layout.kdl
+fi
+
+if [ -n "$ZELLIJ" ]; then
+    zellij pipe --plugin https://github.com/mostafaqanbaryan/zellij-switch/releases/download/0.2.1/zellij-switch.wasm -- "--session ${SESSION_NAME}"
+fi
+"""
+
+[pre-remove]
+stop_services = "direnv exec . process-compose down -p ${PROCESS_COMPOSE_PORT:-9999} || true"
+
+[post-remove]
+clean_term = """
+SESSION_NAME="$(echo {{ branch | sanitize_db }} | cut -c -30)"
+
+zellij list-sessions -s | grep -q ${SESSION_NAME} && zellij delete-session --force ${SESSION_NAME} || true
+"""
+
+[list]
+url = "http://localhost:{{ ('sherpa-' ~ branch) | hash_port }}"

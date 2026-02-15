@@ -36,3 +36,5 @@ assets/static/js/
 
 # Beads local state
 .beads/local/
+
+.local_envrc
