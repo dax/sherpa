@@ -3,7 +3,11 @@ all-features = true
 targets = []
 
 [advisories]
-ignore = []
+ignore = [
+    # fxhash is unmaintained but pulled transitively via loco-rs -> scraper -> selectors.
+    # Nothing we can do until upstream migrates away from it.
+    "RUSTSEC-2025-0057",
+]
 
 [licenses]
 allow = [

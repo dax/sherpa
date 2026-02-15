@@ -46,8 +46,4 @@ qa:
 
 # Start all processes (server + CSS watcher)
 up:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    trap 'kill $(jobs -p) 2>/dev/null' EXIT
-    npm run css:watch &
-    cargo watch -x 'loco start' -w src -w config -w assets/views
+    process-compose up

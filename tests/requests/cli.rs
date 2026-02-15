@@ -90,19 +90,17 @@ async fn home_page_shows_cli_status() {
 
 #[tokio::test]
 #[serial]
-async fn setup_page_has_model_select_dropdowns() {
+async fn setup_page_has_model_selects_or_no_tools_message() {
     request::<App, _, _>(|request, _ctx| async move {
         let res = request.get("/cli/setup").await;
         assert_eq!(res.status_code(), 200);
 
         let body = res.text();
+        let has_selects = body.contains(r#"<select"#) && body.contains("CLI Default");
+        let has_no_tools_msg = body.contains("No AI CLI tools detected");
         assert!(
-            body.contains(r#"<select"#),
-            "page should contain select elements for model selection"
-        );
-        assert!(
-            body.contains("CLI Default"),
-            "select should have a CLI Default option"
+            has_selects || has_no_tools_msg,
+            "page should show model selects (when CLIs available) or no-tools message"
         );
     })
     .await;
