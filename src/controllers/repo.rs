@@ -131,7 +131,7 @@ async fn resume_submit(
     if let Some(step) = session.first_unvalidated_step() {
         format::render().redirect(&format!("/review/{session_id}/guide/step/{step}"))
     } else if session.review_plan.is_some() {
-        format::render().redirect(&format!("/review/{session_id}/guide"))
+        format::render().redirect(&format!("/review/{session_id}/guide/step/1"))
     } else {
         format::render().redirect(&format!("/review/{session_id}/summary"))
     }

@@ -192,75 +192,6 @@ fn make_session_with_plan() -> ReviewSession {
 
 #[tokio::test]
 #[serial]
-async fn can_get_guide_page_with_plan() {
-    request::<App, _, _>(|request, ctx| async move {
-        let session = make_session_with_plan();
-        let session_id = session.id.clone();
-        sync_session_to_db(&ctx.db, &session).await;
-
-        let res = request.get(&format!("/review/{session_id}/guide")).await;
-
-        assert_eq!(res.status_code(), 200);
-
-        let body = res.text();
-        assert!(
-            body.contains("Review Plan"),
-            "should show review plan heading"
-        );
-        assert!(
-            body.contains("Core data models"),
-            "should show step 1 title"
-        );
-        assert!(
-            body.contains("New feature code"),
-            "should show step 2 title"
-        );
-        assert!(body.contains("2 steps"), "should show total step count");
-        assert!(body.contains("lib.rs"), "should show file reference");
-        assert!(
-            body.contains("Foundation types"),
-            "should show step rationale"
-        );
-
-        cleanup_session(&session_id);
-    })
-    .await;
-}
-
-#[tokio::test]
-#[serial]
-async fn guide_page_redirects_without_plan() {
-    request::<App, _, _>(|request, ctx| async move {
-        let session = make_test_session();
-        let session_id = session.id.clone();
-        ensure_db_session(&ctx.db, &session).await;
-
-        let res = request.get(&format!("/review/{session_id}/guide")).await;
-
-        let status = res.status_code();
-        assert!(
-            status == 200 || status == 303 || status == 302,
-            "should redirect or show summary, got {status}"
-        );
-
-        cleanup_session(&session_id);
-    })
-    .await;
-}
-
-#[tokio::test]
-#[serial]
-async fn guide_page_returns_404_for_invalid_session() {
-    request::<App, _, _>(|request, _ctx| async move {
-        let res = request.get("/review/nonexistent-session/guide").await;
-
-        assert_eq!(res.status_code(), 404);
-    })
-    .await;
-}
-
-#[tokio::test]
-#[serial]
 async fn can_skip_plan_generation() {
     request::<App, _, _>(|request, ctx| async move {
         let session = make_test_session();
@@ -422,8 +353,8 @@ async fn step_page_shows_navigation() {
             "step 2 should have relation section trigger"
         );
         assert!(
-            body.contains("Back to Guide"),
-            "last step should have Back to Guide button"
+            body.contains("Back to Summary"),
+            "last step should have Back to Summary button"
         );
 
         cleanup_session(&session_id);
@@ -509,30 +440,6 @@ async fn can_skip_step_section() {
         assert!(
             body.contains("Step Explanation"),
             "should show section title"
-        );
-
-        cleanup_session(&session_id);
-    })
-    .await;
-}
-
-#[tokio::test]
-#[serial]
-async fn guide_page_has_step_links() {
-    request::<App, _, _>(|request, ctx| async move {
-        let session = make_session_with_plan();
-        let session_id = session.id.clone();
-        sync_session_to_db(&ctx.db, &session).await;
-
-        let res = request.get(&format!("/review/{session_id}/guide")).await;
-
-        assert_eq!(res.status_code(), 200);
-        let body = res.text();
-        assert!(body.contains("/guide/step/1"), "should have link to step 1");
-        assert!(body.contains("/guide/step/2"), "should have link to step 2");
-        assert!(
-            body.contains("Review Step"),
-            "should have Review Step button"
         );
 
         cleanup_session(&session_id);
@@ -847,33 +754,6 @@ async fn validated_step_shows_checkmark_in_sidebar() {
 
 #[tokio::test]
 #[serial]
-async fn guide_page_shows_validation_progress() {
-    request::<App, _, _>(|request, ctx| async move {
-        let mut session = make_session_with_plan();
-        session.validated_steps = vec![true, false];
-        sync_session_to_db(&ctx.db, &session).await;
-        let session_id = session.id.clone();
-
-        let res = request.get(&format!("/review/{session_id}/guide")).await;
-
-        assert_eq!(res.status_code(), 200);
-        let body = res.text();
-        assert!(
-            body.contains("1/2 validated"),
-            "should show validation progress"
-        );
-        assert!(
-            body.contains("step-success"),
-            "validated step should have step-success class"
-        );
-
-        cleanup_session(&session_id);
-    })
-    .await;
-}
-
-#[tokio::test]
-#[serial]
 async fn previous_button_does_not_unvalidate() {
     request::<App, _, _>(|request, ctx| async move {
         let mut session = make_session_with_plan();
@@ -1039,8 +919,8 @@ async fn summary_page_hides_start_review_when_complete() {
             "should not show Start Review when review is complete"
         );
         assert!(
-            body.contains("View Review Guide"),
-            "should show link to review guide instead"
+            body.contains("View Review Steps"),
+            "should show link to review steps instead"
         );
 
         cleanup_session(&session_id);

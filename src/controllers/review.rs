@@ -402,7 +402,7 @@ async fn guide_start(
     let (_model, session) = load_session_from_db(&ctx.db, &session_id).await?;
 
     if session.review_plan.is_some() {
-        return format::render().redirect(&format!("/review/{session_id}/guide"));
+        return format::render().redirect(&format!("/review/{session_id}/guide/step/1"));
     }
 
     let settings = match load_ai_settings() {
@@ -451,7 +451,7 @@ async fn guide_start(
                         let _ = file_session.save();
                     }
 
-                    format::render().redirect(&format!("/review/{session_id}/guide"))
+                    format::render().redirect(&format!("/review/{session_id}/guide/step/1"))
                 }
                 Err(error) => format::render().view(
                     &v,
@@ -504,58 +504,7 @@ async fn guide_plan_skip(
         let _ = file_session.save();
     }
 
-    format::render().redirect(&format!("/review/{session_id}/guide"))
-}
-
-#[debug_handler]
-async fn guide_page(
-    ViewEngine(v): ViewEngine<TeraView>,
-    State(ctx): State<AppContext>,
-    Path(session_id): Path<String>,
-) -> Result<Response> {
-    let (_model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
-
-    let plan = match &session.review_plan {
-        Some(plan) => plan.clone(),
-        None => {
-            return format::render().redirect(&format!("/review/{session_id}/summary"));
-        }
-    };
-
-    session.ensure_validated_steps_size();
-
-    let steps_data: Vec<serde_json::Value> = plan
-        .steps
-        .iter()
-        .enumerate()
-        .map(|(i, step)| {
-            let files: Vec<String> = step.file_refs.iter().map(|f| f.path.clone()).collect();
-            let validated = session.validated_steps.get(i).copied().unwrap_or(false);
-            serde_json::json!({
-                "number": i + 1,
-                "title": step.title,
-                "rationale": step.rationale,
-                "file_count": step.file_refs.len(),
-                "files": files,
-                "validated": validated,
-            })
-        })
-        .collect();
-
-    let validated_count = session.validated_steps.iter().filter(|&&v| v).count();
-
-    format::render().view(
-        &v,
-        "review/guide.html",
-        data!({
-            "session_id": session.id,
-            "branch": session.branch,
-            "default_branch": session.default_branch,
-            "steps": steps_data,
-            "total_steps": plan.steps.len(),
-            "validated_count": validated_count,
-        }),
-    )
+    format::render().redirect(&format!("/review/{session_id}/guide/step/1"))
 }
 
 const LOADING_HINTS: &[&str] = &[
@@ -1208,7 +1157,7 @@ async fn step_validate(
             step_number + 1
         ))
     } else {
-        format::render().redirect(&format!("/review/{session_id}/guide"))
+        format::render().redirect(&format!("/review/{session_id}/guide/step/1"))
     }
 }
 
@@ -1291,7 +1240,6 @@ pub fn page_routes() -> Routes {
             "/{session_id}/guide/step/{step_number}/skip/{section}",
             get(step_section_skip),
         )
-        .add("/{session_id}/guide", get(guide_page))
 }
 
 pub fn api_routes() -> Routes {

@@ -44,8 +44,17 @@ fmt-check:
     cargo fmt --check
 
 # Run all quality gates (check + test + clippy)
-qa: check test lint
+qa: fmt check test lint
 
 # Start all processes (server + CSS watcher)
 up:
-    process-compose up
+    process-compose -p ${PROCESS_COMPOSE_PORT:-9998} up
+
+@start service:
+    process-compose -p ${PROCESS_COMPOSE_PORT:-9998} process start {{ service }}
+
+@stop service:
+    process-compose -p ${PROCESS_COMPOSE_PORT:-9998} process stop {{ service }}
+
+@logs service:
+    process-compose -p ${PROCESS_COMPOSE_PORT:-9998} process logs -n 100 -f {{ service }}
