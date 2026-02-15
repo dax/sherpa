@@ -44,6 +44,16 @@ impl std::fmt::Display for AiCliError {
     }
 }
 
+fn cli_failure_from_output(output: &std::process::Output) -> AiCliError {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        AiCliError::CliFailure { stderr: stdout }
+    } else {
+        AiCliError::CliFailure { stderr }
+    }
+}
+
 impl std::error::Error for AiCliError {}
 
 pub async fn generate(cli: AiCli, prompt: &AiPrompt) -> Result<String, AiCliError> {
@@ -57,6 +67,7 @@ pub async fn generate_with_timeout(
     model: Option<&str>,
 ) -> Result<String, AiCliError> {
     let full_prompt = prompt.full_prompt();
+    let model = model.map(|m| cli.normalize_model(m));
 
     let fut = async move {
         let output = match cli {
@@ -81,9 +92,7 @@ pub async fn generate_with_timeout(
         };
 
         if !output.status.success() {
-            return Err(AiCliError::CliFailure {
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
+            return Err(cli_failure_from_output(&output));
         }
 
         Ok::<String, AiCliError>(String::from_utf8_lossy(&output.stdout).trim().to_string())
@@ -269,6 +278,7 @@ pub async fn prime_session(
         instruction: primer_instruction().to_string(),
     };
     let full_prompt = prompt.full_prompt();
+    let model = model.map(|m| cli.normalize_model(m));
 
     let fut = async move {
         let output = match cli {
@@ -293,9 +303,7 @@ pub async fn prime_session(
         };
 
         if !output.status.success() {
-            return Err(AiCliError::CliFailure {
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
+            return Err(cli_failure_from_output(&output));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -318,6 +326,7 @@ pub async fn generate_forked(
 ) -> Result<String, AiCliError> {
     let instruction = instruction.to_string();
     let primed = primed.clone();
+    let model = model.map(|m| primed.cli.normalize_model(m));
 
     let fut = async move {
         let output = match primed.cli {
@@ -343,9 +352,7 @@ pub async fn generate_forked(
         };
 
         if !output.status.success() {
-            return Err(AiCliError::CliFailure {
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            });
+            return Err(cli_failure_from_output(&output));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -675,5 +682,33 @@ mod tests {
         let cloned = primed.clone();
         assert_eq!(cloned.session_id, "test-123");
         assert_eq!(cloned.cli, AiCli::Claude);
+    }
+
+    #[test]
+    fn test_cli_failure_from_output_uses_stderr_when_present() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"stdout content".to_vec(),
+            stderr: b"stderr error".to_vec(),
+        };
+        let err = cli_failure_from_output(&output);
+        match err {
+            AiCliError::CliFailure { stderr } => assert_eq!(stderr, "stderr error"),
+            _ => panic!("expected CliFailure"),
+        }
+    }
+
+    #[test]
+    fn test_cli_failure_from_output_falls_back_to_stdout() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::default(),
+            stdout: b"model not found".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err = cli_failure_from_output(&output);
+        match err {
+            AiCliError::CliFailure { stderr } => assert_eq!(stderr, "model not found"),
+            _ => panic!("expected CliFailure"),
+        }
     }
 }

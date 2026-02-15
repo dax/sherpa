@@ -64,13 +64,17 @@ async fn cli_models(
     let config = load_config();
     let models = cli_detection::list_models(cli).await;
 
+    let same_cli = config.ai.selected_cli == Some(cli);
+    let deep_model = if same_cli { config.ai.deep_model } else { None };
+    let fast_model = if same_cli { config.ai.fast_model } else { None };
+
     format::render().view(
         &v,
         "cli/_model_selects.html",
         data!({
             "models": models,
-            "deep_model": config.ai.deep_model,
-            "fast_model": config.ai.fast_model,
+            "deep_model": deep_model,
+            "fast_model": fast_model,
         }),
     )
 }
@@ -142,16 +146,11 @@ async fn cli_select(
         );
     }
 
-    format::render().view(
-        &v,
-        "cli/_success.html",
-        data!({
-            "selected_name": selected.display_name(),
-            "selected_value": selected.binary_name(),
-            "deep_model": config.ai.deep_model,
-            "fast_model": config.ai.fast_model,
-        }),
-    )
+    Ok(axum::response::Response::builder()
+        .header("HX-Redirect", "/")
+        .body(axum::body::Body::empty())
+        .unwrap()
+        .into_response())
 }
 
 fn load_config() -> SherpaConfig {

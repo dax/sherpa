@@ -27,6 +27,15 @@ impl AiCli {
     pub fn all() -> &'static [AiCli] {
         &[AiCli::Opencode, AiCli::Claude]
     }
+
+    /// Strip `provider/` prefix for Claude (e.g. `anthropic/claude-sonnet-4-5` → `claude-sonnet-4-5`).
+    /// OpenCode model names pass through unchanged.
+    pub fn normalize_model(self, model: &str) -> &str {
+        match self {
+            Self::Claude => model.rsplit('/').next().unwrap_or(model),
+            Self::Opencode => model,
+        }
+    }
 }
 
 impl std::fmt::Display for AiCli {
@@ -224,5 +233,32 @@ mod tests {
         } else {
             assert!(models.is_empty());
         }
+    }
+
+    #[test]
+    fn test_normalize_model_claude_strips_provider_prefix() {
+        assert_eq!(
+            AiCli::Claude.normalize_model("anthropic/claude-sonnet-4-5-20250929"),
+            "claude-sonnet-4-5-20250929"
+        );
+    }
+
+    #[test]
+    fn test_normalize_model_claude_keeps_bare_name() {
+        assert_eq!(AiCli::Claude.normalize_model("sonnet"), "sonnet");
+        assert_eq!(AiCli::Claude.normalize_model("opus"), "opus");
+        assert_eq!(
+            AiCli::Claude.normalize_model("claude-opus-4-6"),
+            "claude-opus-4-6"
+        );
+    }
+
+    #[test]
+    fn test_normalize_model_opencode_preserves_prefix() {
+        assert_eq!(
+            AiCli::Opencode.normalize_model("anthropic/claude-sonnet-4-5-20250929"),
+            "anthropic/claude-sonnet-4-5-20250929"
+        );
+        assert_eq!(AiCli::Opencode.normalize_model("sonnet"), "sonnet");
     }
 }
