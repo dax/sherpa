@@ -55,7 +55,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: cargo test --all-features --workspace
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --all-features --workspace
 
   build:
     name: Build

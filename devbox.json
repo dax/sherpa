@@ -4,6 +4,7 @@
     "rustup@latest",
     "nodejs@latest",
     "cargo-watch@latest",
+    "cargo-nextest@latest",
     "libiconv@latest",
     "just@latest",
     "prek@latest"

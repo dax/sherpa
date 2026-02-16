@@ -164,7 +164,7 @@ These must pass before any code is merged:
 
 ```bash
 cargo check                     # Compilation
-cargo test                      # Test suite
+cargo nextest run               # Test suite (parallel via nextest)
 cargo clippy -- -D warnings     # Lints (warnings = errors)
 cargo fmt --check               # Formatting check
 
@@ -190,7 +190,7 @@ To check your current port: `echo $PORT` (requires direnv to have loaded `.envrc
 just dev           # Build CSS + start server (one-shot, no auto-reload)
 just watch         # Build CSS + cargo-watch (auto-reload)
 just server-watch  # cargo-watch server only (no CSS build)
-just test          # cargo test
+just test          # cargo nextest run
 just lint          # cargo clippy
 just fmt           # cargo fmt
 just qa            # check + test + clippy

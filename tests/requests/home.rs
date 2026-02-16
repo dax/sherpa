@@ -24,7 +24,10 @@ async fn can_get_index_page() {
 
         let body = res.text();
         assert!(body.contains("Sherpa"), "page should contain app name");
-        assert!(body.contains("htmx.org"), "page should include HTMX script");
+        assert!(
+            body.contains("htmx.min.js"),
+            "page should include HTMX script"
+        );
         assert!(
             body.contains("flyonui"),
             "page should include FlyonUI assets"

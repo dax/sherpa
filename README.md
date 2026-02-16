@@ -174,7 +174,7 @@ In the Sherpa web UI, the reviewer can:
 just dev         # Build CSS + start server (port 5150)
 just watch       # Build CSS + cargo-watch (auto-reload on save)
 just qa          # Run all quality gates (check + test + clippy)
-just test        # cargo test
+just test        # cargo nextest run
 just lint        # cargo clippy -- -D warnings
 just fmt         # cargo fmt
 just fmt-check   # cargo fmt --check
@@ -195,6 +195,7 @@ just up          # Start all processes (server + CSS watcher)
 Managed by prek, configured in .pre-commit-config.yaml:
 - **rustfmt** — format check on staged `.rs` files
 - **clippy** — lint check on staged `.rs` files
+- **nextest** — test suite on staged `.rs` files
 - **beads** — issue tracking hooks (pre-commit, pre-push, prepare-commit-msg)
 
 ### Quality Gates
@@ -203,7 +204,7 @@ All of these must pass before merging:
 
 ```sh
 cargo check                     # Compilation
-cargo test                      # Test suite
+cargo nextest run               # Test suite (parallel via nextest)
 cargo clippy -- -D warnings     # Lints (warnings are errors)
 cargo fmt --check               # Formatting
 ```

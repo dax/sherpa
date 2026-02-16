@@ -17,7 +17,7 @@ The stack is Loco.rs (Rust backend), HTMX + FlyonUI (UI), diff2html (client-side
 
 These commands must pass for every user story:
 - `cargo check` — Compilation check
-- `cargo test` — Test suite
+- `cargo nextest run` — Test suite (parallel via nextest)
 - `cargo clippy` — Lint check
 
 For UI stories, also include:

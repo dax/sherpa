@@ -15,6 +15,13 @@ repos:
         files: \.rs$
         pass_filenames: false
 
+      - id: nextest
+        name: nextest
+        entry: cargo nextest run
+        language: system
+        files: \.rs$
+        pass_filenames: false
+
       - id: beads-pre-commit
         name: beads pre-commit
         entry: bd hook pre-commit

@@ -1,0 +1,11 @@
+[profile.default]
+fail-fast = true
+
+# Integration tests (tests/mod.rs → binary "sherpa::mod") share a SQLite DB
+# and use serial_test — they must run one at a time.
+[test-groups.serial-integration]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = "binary_id(sherpa::mod)"
+test-group = "serial-integration"

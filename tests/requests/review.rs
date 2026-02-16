@@ -462,7 +462,7 @@ async fn step_page_sidebar_highlights_current_step() {
         assert_eq!(res.status_code(), 200);
         let body = res.text();
         assert!(
-            body.contains("step-primary"),
+            body.contains("step-item--active"),
             "should highlight current step in sidebar"
         );
 
@@ -748,8 +748,8 @@ async fn validated_step_shows_checkmark_in_sidebar() {
         assert_eq!(res.status_code(), 200);
         let body = res.text();
         assert!(
-            body.contains("step-success"),
-            "validated step should have step-success class in sidebar"
+            body.contains("step-item--validated"),
+            "validated step should have step-item--validated class in sidebar"
         );
 
         cleanup_session(&session_id);

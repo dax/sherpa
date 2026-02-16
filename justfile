@@ -27,9 +27,9 @@ watch: css-build server-watch
 build: css-build
     cargo build
 
-# Run tests
+# Run tests (via cargo-nextest for parallel execution)
 test:
-    cargo test
+    cargo nextest run
 
 # Run cargo check
 check:

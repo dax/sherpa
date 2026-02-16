@@ -1,6 +1,54 @@
 {
   "lockfile_version": "1",
   "packages": {
+    "cargo-nextest@latest": {
+      "last_modified": "2026-02-10T02:06:53Z",
+      "resolved": "github:NixOS/nixpkgs/49d75834011c94a120a9cb874ac1c4d8b7bfc767#cargo-nextest",
+      "source": "devbox-search",
+      "version": "0.9.126",
+      "systems": {
+        "aarch64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/4xf6zlyrl3qb3kqx53hm8jahnkv589b8-cargo-nextest-0.9.126",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/4xf6zlyrl3qb3kqx53hm8jahnkv589b8-cargo-nextest-0.9.126"
+        },
+        "aarch64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/2is2mjry1r48nm2v0x5yb2wpqkwjyqys-cargo-nextest-0.9.126",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/2is2mjry1r48nm2v0x5yb2wpqkwjyqys-cargo-nextest-0.9.126"
+        },
+        "x86_64-darwin": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/a7hjjn63c23gav6jn4ly270l4g1m4wnp-cargo-nextest-0.9.126",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/a7hjjn63c23gav6jn4ly270l4g1m4wnp-cargo-nextest-0.9.126"
+        },
+        "x86_64-linux": {
+          "outputs": [
+            {
+              "name": "out",
+              "path": "/nix/store/ggpz6lrbmlr7kqn910dy4pjy1xnfvw3w-cargo-nextest-0.9.126",
+              "default": true
+            }
+          ],
+          "store_path": "/nix/store/ggpz6lrbmlr7kqn910dy4pjy1xnfvw3w-cargo-nextest-0.9.126"
+        }
+      }
+    },
     "cargo-watch@latest": {
       "last_modified": "2026-01-23T17:20:52Z",
       "resolved": "github:NixOS/nixpkgs/a1bab9e494f5f4939442a57a58d0449a109593fe#cargo-watch",
