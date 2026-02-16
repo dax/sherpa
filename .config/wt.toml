@@ -1,10 +1,12 @@
 [post-create]
 copy = "wt step copy-ignored"
+beads = "mkdir -p .beads && echo '{{ primary_worktree_path }}/.beads' > .beads/redirect"
 env = """
 cat >> .local_envrc << EOF
 export PORT={{ ('sherpa-' ~ branch) | hash_port }}
 export PROCESS_COMPOSE_PORT={{ ('pc-' ~ branch) | hash_port }}
 export WORKTRUNK_ZELLIJ_SESSION="$(echo {{ branch | sanitize_db }} | cut -c -30)"
+export BD_SANDBOX=1
 EOF
 """
 setup = "direnv allow"
