@@ -67,8 +67,7 @@ async fn summary_page(
 
     session.ensure_validated_steps_size();
 
-    let all_validated =
-        !session.validated_steps.is_empty() && session.validated_steps.iter().all(|&v| v);
+    let all_validated = session.all_steps_validated();
 
     let db_messages = chat_messages::find_by_session(&ctx.db, session_db_id)
         .await
@@ -682,21 +681,38 @@ async fn step_page(
     session.ensure_validated_steps_size();
 
     let step = &plan.steps[step_number - 1];
-    let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
+    let step_files: Vec<String> = step.file_refs.iter().map(|f| f.path.clone()).collect();
+
+    let step_validation = session
+        .validated_steps
+        .get(step_number - 1)
+        .cloned()
+        .unwrap_or_default();
+
+    let file_diffs: Vec<serde_json::Value> = step
         .file_refs
         .iter()
-        .map(|f| (f.path.clone(), f.diff_lines))
+        .map(|f| {
+            let refs = vec![(f.path.clone(), f.diff_lines)];
+            let diff = git_analysis::extract_diff_for_files(&session.diff, &refs);
+            let validated = step_validation.is_file_validated(&f.path);
+            serde_json::json!({
+                "path": f.path,
+                "diff": diff,
+                "validated": validated,
+            })
+        })
         .collect();
-    let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
 
-    let step_files: Vec<String> = step.file_refs.iter().map(|f| f.path.clone()).collect();
+    let validated_file_count = step_validation.validated_count();
+    let total_file_count = step.file_refs.len();
 
     let steps_data: Vec<serde_json::Value> = plan
         .steps
         .iter()
         .enumerate()
         .map(|(i, s)| {
-            let validated = session.validated_steps.get(i).copied().unwrap_or(false);
+            let validated = session.is_step_validated(i);
             serde_json::json!({
                 "number": i + 1,
                 "title": s.title,
@@ -707,11 +723,7 @@ async fn step_page(
         })
         .collect();
 
-    let current_step_validated = session
-        .validated_steps
-        .get(step_number - 1)
-        .copied()
-        .unwrap_or(false);
+    let current_step_validated = session.is_step_validated(step_number - 1);
 
     let has_previous = step_number > 1;
     let prev_step_title = if has_previous {
@@ -744,12 +756,14 @@ async fn step_page(
             "step_title": step.title,
             "step_rationale": step.rationale,
             "step_files": step_files,
-            "step_diff": step_diff,
+            "file_diffs": file_diffs,
             "steps": steps_data,
             "has_previous": has_previous,
             "prev_step_title": prev_step_title,
             "chat_messages": chat_messages_json,
             "current_step_validated": current_step_validated,
+            "validated_file_count": validated_file_count,
+            "total_file_count": total_file_count,
         }),
     )
 }
@@ -1122,21 +1136,31 @@ async fn step_chat(
     )
 }
 
+#[derive(Deserialize)]
+pub struct ValidateFileForm {
+    file_path: String,
+}
+
 #[debug_handler]
-async fn step_validate(
+async fn step_validate_file(
+    ViewEngine(v): ViewEngine<TeraView>,
     State(ctx): State<AppContext>,
     Path((session_id, step_number)): Path<(String, usize)>,
+    Form(form): Form<ValidateFileForm>,
 ) -> Result<Response> {
     let (_model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
 
-    let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
+    let plan = match &session.review_plan {
+        Some(p) => p.clone(),
+        None => return Err(Error::NotFound),
+    };
     let total_steps = plan.steps.len();
     if step_number < 1 || step_number > total_steps {
         return Err(Error::NotFound);
     }
 
     session.ensure_validated_steps_size();
-    session.validated_steps[step_number - 1] = true;
+    session.validated_steps[step_number - 1].validate_file(&form.file_path);
 
     review_sessions::update_validated_steps(&ctx.db, &session_id, &session.validated_steps)
         .await
@@ -1147,7 +1171,71 @@ async fn step_validate(
 
     let _ = session.save();
 
-    let all_validated = session.validated_steps.iter().all(|&v| v);
+    let current_step_validated = session.is_step_validated(step_number - 1);
+    let sv = &session.validated_steps[step_number - 1];
+    let validated_file_count = sv.validated_count();
+    let total_file_count = plan.steps[step_number - 1].file_refs.len();
+
+    let step = &plan.steps[step_number - 1];
+    let file_diff = step
+        .file_refs
+        .iter()
+        .find(|f| f.path == form.file_path)
+        .map(|f| {
+            let refs = vec![(f.path.clone(), f.diff_lines)];
+            git_analysis::extract_diff_for_files(&session.diff, &refs)
+        })
+        .unwrap_or_default();
+
+    format::render().view(
+        &v,
+        "review/_file_validated.html",
+        data!({
+            "session_id": session_id,
+            "file_path": form.file_path,
+            "file_diff": file_diff,
+            "step_number": step_number,
+            "total_steps": total_steps,
+            "current_step_validated": current_step_validated,
+            "validated_file_count": validated_file_count,
+            "total_file_count": total_file_count,
+        }),
+    )
+}
+
+#[debug_handler]
+async fn step_validate(
+    State(ctx): State<AppContext>,
+    Path((session_id, step_number)): Path<(String, usize)>,
+) -> Result<Response> {
+    let (_model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
+
+    let plan = match &session.review_plan {
+        Some(p) => p.clone(),
+        None => return Err(Error::NotFound),
+    };
+    let total_steps = plan.steps.len();
+    if step_number < 1 || step_number > total_steps {
+        return Err(Error::NotFound);
+    }
+
+    session.ensure_validated_steps_size();
+
+    let step = &plan.steps[step_number - 1];
+    for file_ref in &step.file_refs {
+        session.validated_steps[step_number - 1].validate_file(&file_ref.path);
+    }
+
+    review_sessions::update_validated_steps(&ctx.db, &session_id, &session.validated_steps)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error saving validated steps: {e}");
+            Error::InternalServerError
+        })?;
+
+    let _ = session.save();
+
+    let all_validated = session.all_steps_validated();
 
     if all_validated {
         format::render().redirect(&format!("/review/{session_id}/summary"))
@@ -1235,6 +1323,10 @@ pub fn page_routes() -> Routes {
         .add(
             "/{session_id}/guide/step/{step_number}/validate",
             post(step_validate),
+        )
+        .add(
+            "/{session_id}/guide/step/{step_number}/validate-file",
+            post(step_validate_file),
         )
         .add(
             "/{session_id}/guide/step/{step_number}/skip/{section}",

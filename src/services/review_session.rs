@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -55,6 +56,82 @@ pub struct FileRef {
     pub diff_lines: Option<(usize, usize)>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StepValidation {
+    #[serde(default)]
+    pub files: HashMap<String, bool>,
+}
+
+impl StepValidation {
+    /// Empty `expected_files` → treated as validated (no files to review).
+    pub fn is_step_validated(&self, expected_files: &[String]) -> bool {
+        if expected_files.is_empty() {
+            return true;
+        }
+        expected_files
+            .iter()
+            .all(|f| self.files.get(f).copied().unwrap_or(false))
+    }
+
+    pub fn validate_file(&mut self, path: &str) {
+        self.files.insert(path.to_string(), true);
+    }
+
+    pub fn is_file_validated(&self, path: &str) -> bool {
+        self.files.get(path).copied().unwrap_or(false)
+    }
+
+    pub fn ensure_files(&mut self, paths: &[String]) {
+        for path in paths {
+            self.files.entry(path.clone()).or_insert(false);
+        }
+    }
+
+    pub fn validated_count(&self) -> usize {
+        self.files.values().filter(|&&v| v).count()
+    }
+}
+
+/// Handles both old `Vec<bool>` and new `Vec<StepValidation>` JSON formats.
+pub fn deserialize_validated_steps<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<StepValidation>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum ValidatedStepsFormat {
+        New(Vec<StepValidation>),
+        Legacy(Vec<bool>),
+    }
+
+    match ValidatedStepsFormat::deserialize(deserializer) {
+        Ok(ValidatedStepsFormat::New(steps)) => Ok(steps),
+        Ok(ValidatedStepsFormat::Legacy(bools)) => {
+            // Legacy Vec<bool>: file paths unknown here; caller must
+            // call ensure_validated_steps_size() to populate them.
+            Ok(bools
+                .into_iter()
+                .map(|validated| {
+                    if validated {
+                        let mut sv = StepValidation::default();
+                        sv.files.insert("__legacy_validated__".to_string(), true);
+                        sv
+                    } else {
+                        StepValidation::default()
+                    }
+                })
+                .collect())
+        }
+        Err(e) => Err(de::Error::custom(format!(
+            "failed to deserialize validated_steps: {e}"
+        ))),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewSession {
     pub id: String,
@@ -73,8 +150,8 @@ pub struct ReviewSession {
     pub metrics: DiffMetrics,
     #[serde(default)]
     pub review_plan: Option<ReviewPlan>,
-    #[serde(default)]
-    pub validated_steps: Vec<bool>,
+    #[serde(default, deserialize_with = "deserialize_validated_steps")]
+    pub validated_steps: Vec<StepValidation>,
     #[serde(default)]
     pub primed_session_id: Option<String>,
 }
@@ -140,9 +217,43 @@ impl ReviewSession {
         if let Some(plan) = &self.review_plan {
             let needed = plan.steps.len();
             if self.validated_steps.len() < needed {
-                self.validated_steps.resize(needed, false);
+                self.validated_steps
+                    .resize(needed, StepValidation::default());
+            }
+            for (i, step) in plan.steps.iter().enumerate() {
+                let file_paths: Vec<String> =
+                    step.file_refs.iter().map(|f| f.path.clone()).collect();
+                self.validated_steps[i].ensure_files(&file_paths);
             }
         }
+    }
+
+    pub fn is_step_validated(&self, step_index: usize) -> bool {
+        let plan = match &self.review_plan {
+            Some(p) => p,
+            None => return false,
+        };
+        let step = match plan.steps.get(step_index) {
+            Some(s) => s,
+            None => return false,
+        };
+        let sv = match self.validated_steps.get(step_index) {
+            Some(sv) => sv,
+            None => return false,
+        };
+        let expected: Vec<String> = step.file_refs.iter().map(|f| f.path.clone()).collect();
+        sv.is_step_validated(&expected)
+    }
+
+    pub fn all_steps_validated(&self) -> bool {
+        let plan = match &self.review_plan {
+            Some(p) => p,
+            None => return false,
+        };
+        if plan.steps.is_empty() {
+            return false;
+        }
+        (0..plan.steps.len()).all(|i| self.is_step_validated(i))
     }
 
     pub fn sessions_dir() -> Result<PathBuf, SessionError> {
@@ -217,7 +328,9 @@ impl ReviewSession {
 
     pub fn first_unvalidated_step(&self) -> Option<usize> {
         self.review_plan.as_ref()?;
-        self.validated_steps.iter().position(|&v| !v).map(|i| i + 1)
+        (0..self.validated_steps.len())
+            .find(|&i| !self.is_step_validated(i))
+            .map(|i| i + 1)
     }
 }
 
@@ -577,19 +690,26 @@ mod tests {
                 ReviewStep {
                     title: "Step 1".to_string(),
                     rationale: "r".to_string(),
-                    file_refs: vec![],
+                    file_refs: vec![FileRef {
+                        path: "a.rs".to_string(),
+                        diff_lines: None,
+                    }],
                     ai_data: StepAiData::default(),
                 },
                 ReviewStep {
                     title: "Step 2".to_string(),
                     rationale: "r".to_string(),
-                    file_refs: vec![],
+                    file_refs: vec![FileRef {
+                        path: "b.rs".to_string(),
+                        diff_lines: None,
+                    }],
                     ai_data: StepAiData::default(),
                 },
             ],
             generated_at: "now".to_string(),
         });
-        session.validated_steps = vec![false, false];
+        session.validated_steps = vec![StepValidation::default(), StepValidation::default()];
+        session.ensure_validated_steps_size();
         assert_eq!(session.first_unvalidated_step(), Some(1));
     }
 
@@ -601,19 +721,28 @@ mod tests {
                 ReviewStep {
                     title: "Step 1".to_string(),
                     rationale: "r".to_string(),
-                    file_refs: vec![],
+                    file_refs: vec![FileRef {
+                        path: "a.rs".to_string(),
+                        diff_lines: None,
+                    }],
                     ai_data: StepAiData::default(),
                 },
                 ReviewStep {
                     title: "Step 2".to_string(),
                     rationale: "r".to_string(),
-                    file_refs: vec![],
+                    file_refs: vec![FileRef {
+                        path: "b.rs".to_string(),
+                        diff_lines: None,
+                    }],
                     ai_data: StepAiData::default(),
                 },
             ],
             generated_at: "now".to_string(),
         });
-        session.validated_steps = vec![true, false];
+        let mut sv1 = StepValidation::default();
+        sv1.validate_file("a.rs");
+        session.validated_steps = vec![sv1, StepValidation::default()];
+        session.ensure_validated_steps_size();
         assert_eq!(session.first_unvalidated_step(), Some(2));
     }
 
@@ -624,12 +753,56 @@ mod tests {
             steps: vec![ReviewStep {
                 title: "Step 1".to_string(),
                 rationale: "r".to_string(),
-                file_refs: vec![],
+                file_refs: vec![FileRef {
+                    path: "a.rs".to_string(),
+                    diff_lines: None,
+                }],
                 ai_data: StepAiData::default(),
             }],
             generated_at: "now".to_string(),
         });
-        session.validated_steps = vec![true];
+        let mut sv = StepValidation::default();
+        sv.validate_file("a.rs");
+        session.validated_steps = vec![sv];
+        session.ensure_validated_steps_size();
         assert_eq!(session.first_unvalidated_step(), None);
+    }
+
+    #[test]
+    fn test_step_validation_per_file() {
+        let mut sv = StepValidation::default();
+        sv.ensure_files(&["a.rs".to_string(), "b.rs".to_string()]);
+        assert!(!sv.is_file_validated("a.rs"));
+        assert!(!sv.is_step_validated(&["a.rs".to_string(), "b.rs".to_string(),]));
+
+        sv.validate_file("a.rs");
+        assert!(sv.is_file_validated("a.rs"));
+        assert!(!sv.is_file_validated("b.rs"));
+        assert_eq!(sv.validated_count(), 1);
+
+        sv.validate_file("b.rs");
+        assert!(sv.is_step_validated(&["a.rs".to_string(), "b.rs".to_string(),]));
+        assert_eq!(sv.validated_count(), 2);
+    }
+
+    #[test]
+    fn test_backward_compat_legacy_bool_deserialize() {
+        let json = r#"{
+            "id": "review-123",
+            "repo_path": "/tmp/test",
+            "branch": "feature",
+            "default_branch": "main",
+            "merge_base": "abc",
+            "diff": "",
+            "changed_files": [],
+            "created_at": "2025-01-01T00:00:00Z",
+            "validated_steps": [true, false]
+        }"#;
+        let session: ReviewSession = serde_json::from_str(json).unwrap();
+        assert_eq!(session.validated_steps.len(), 2);
+        assert!(session.validated_steps[0]
+            .files
+            .contains_key("__legacy_validated__"));
+        assert!(session.validated_steps[1].files.is_empty());
     }
 }

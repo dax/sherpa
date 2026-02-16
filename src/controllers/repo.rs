@@ -63,12 +63,14 @@ async fn analyze_submit(
         let existing = existing_model.to_review_session();
         let merge_base_changed = existing.merge_base != analysis.merge_base;
 
-        let validated_count = existing.validated_steps.iter().filter(|&&v| v).count();
         let total_steps = existing
             .review_plan
             .as_ref()
             .map(|p| p.steps.len())
             .unwrap_or(0);
+        let validated_count = (0..total_steps)
+            .filter(|&i| existing.is_step_validated(i))
+            .count();
 
         return format::render().view(
             &v,

@@ -78,8 +78,25 @@ impl Model {
             .review_plan
             .as_ref()
             .and_then(|p| serde_json::from_str(p).ok());
-        let validated_steps: Vec<bool> =
-            serde_json::from_str(&self.validated_steps).unwrap_or_default();
+
+        // Backward-compat: deserialize handles both Vec<bool> and
+        // Vec<StepValidation> via the custom deserializer on the
+        // ReviewSession struct.  We build a minimal JSON wrapper so
+        // serde triggers the right path.
+        let validated_steps: Vec<StepValidation> = {
+            let raw = &self.validated_steps;
+            #[derive(serde::Deserialize)]
+            struct Wrapper {
+                #[serde(
+                    deserialize_with = "crate::services::review_session::deserialize_validated_steps"
+                )]
+                validated_steps: Vec<StepValidation>,
+            }
+            let json = format!(r#"{{"validated_steps":{raw}}}"#);
+            serde_json::from_str::<Wrapper>(&json)
+                .map(|w| w.validated_steps)
+                .unwrap_or_default()
+        };
 
         ReviewSession {
             id: self.session_key.clone(),
@@ -146,7 +163,7 @@ pub async fn update_primed_session(
 pub async fn update_validated_steps(
     db: &DatabaseConnection,
     session_key: &str,
-    steps: &[bool],
+    steps: &[crate::services::review_session::StepValidation],
 ) -> Result<(), DbErr> {
     let model = Model::find_by_session_key(db, session_key)
         .await?

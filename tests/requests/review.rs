@@ -7,7 +7,7 @@ use sherpa::models::chat_messages as cm_model;
 use sherpa::models::review_sessions as rs_model;
 use sherpa::services::git_analysis::{ChangedFile, FileStatus, GitAnalysis};
 use sherpa::services::review_session::{
-    repo_session_path, FileRef, ReviewPlan, ReviewSession, ReviewStep, StepAiData,
+    repo_session_path, FileRef, ReviewPlan, ReviewSession, ReviewStep, StepAiData, StepValidation,
 };
 
 fn make_test_session() -> ReviewSession {
@@ -298,8 +298,8 @@ async fn can_get_step_page() {
         );
         assert!(body.contains("lib.rs"), "should show file reference");
         assert!(
-            body.contains("diff-container"),
-            "should have diff container"
+            body.contains("diff-file-container"),
+            "should have per-file diff containers"
         );
         assert!(
             body.contains("hx-get"),
@@ -632,8 +632,11 @@ async fn can_validate_step() {
             .unwrap();
         let loaded = model.to_review_session();
         assert_eq!(loaded.validated_steps.len(), 2);
-        assert!(loaded.validated_steps[0], "step 1 should be validated");
-        assert!(!loaded.validated_steps[1], "step 2 should not be validated");
+        assert!(loaded.is_step_validated(0), "step 1 should be validated");
+        assert!(
+            !loaded.is_step_validated(1),
+            "step 2 should not be validated"
+        );
 
         cleanup_session(&session_id);
     })
@@ -663,7 +666,7 @@ async fn validate_last_step_redirects_to_guide() {
             .unwrap()
             .unwrap();
         let loaded = model.to_review_session();
-        assert!(loaded.validated_steps[1], "step 2 should be validated");
+        assert!(loaded.is_step_validated(1), "step 2 should be validated");
 
         cleanup_session(&session_id);
     })
@@ -732,7 +735,9 @@ async fn step_page_shows_validate_button() {
 async fn validated_step_shows_checkmark_in_sidebar() {
     request::<App, _, _>(|request, ctx| async move {
         let mut session = make_session_with_plan();
-        session.validated_steps = vec![true, false];
+        let mut sv_validated = StepValidation::default();
+        sv_validated.validate_file("src/lib.rs");
+        session.validated_steps = vec![sv_validated, StepValidation::default()];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
 
@@ -757,7 +762,9 @@ async fn validated_step_shows_checkmark_in_sidebar() {
 async fn previous_button_does_not_unvalidate() {
     request::<App, _, _>(|request, ctx| async move {
         let mut session = make_session_with_plan();
-        session.validated_steps = vec![true, false];
+        let mut sv_validated = StepValidation::default();
+        sv_validated.validate_file("src/lib.rs");
+        session.validated_steps = vec![sv_validated, StepValidation::default()];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
 
@@ -773,7 +780,7 @@ async fn previous_button_does_not_unvalidate() {
             .unwrap();
         let loaded = model.to_review_session();
         assert!(
-            loaded.validated_steps[0],
+            loaded.is_step_validated(0),
             "revisiting step 1 should not unvalidate it"
         );
 
@@ -787,7 +794,11 @@ async fn previous_button_does_not_unvalidate() {
 async fn validation_state_persists_across_loads() {
     request::<App, _, _>(|_request, ctx| async move {
         let mut session = make_session_with_plan();
-        session.validated_steps = vec![true, true];
+        let mut sv1 = StepValidation::default();
+        sv1.validate_file("src/lib.rs");
+        let mut sv2 = StepValidation::default();
+        sv2.validate_file("src/new.rs");
+        session.validated_steps = vec![sv1, sv2];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
 
@@ -796,7 +807,8 @@ async fn validation_state_persists_across_loads() {
             .unwrap()
             .unwrap();
         let loaded = model.to_review_session();
-        assert_eq!(loaded.validated_steps, vec![true, true]);
+        assert!(loaded.is_step_validated(0));
+        assert!(loaded.is_step_validated(1));
 
         cleanup_session(&session_id);
     })
@@ -808,7 +820,9 @@ async fn validation_state_persists_across_loads() {
 async fn validate_all_steps_redirects_to_summary() {
     request::<App, _, _>(|request, ctx| async move {
         let mut session = make_session_with_plan();
-        session.validated_steps = vec![true, false];
+        let mut sv_validated = StepValidation::default();
+        sv_validated.validate_file("src/lib.rs");
+        session.validated_steps = vec![sv_validated, StepValidation::default()];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
 
@@ -828,10 +842,10 @@ async fn validate_all_steps_redirects_to_summary() {
             .unwrap();
         let loaded = model.to_review_session();
         assert!(
-            loaded.validated_steps[0],
+            loaded.is_step_validated(0),
             "step 1 should still be validated"
         );
-        assert!(loaded.validated_steps[1], "step 2 should be validated");
+        assert!(loaded.is_step_validated(1), "step 2 should be validated");
 
         cleanup_session(&session_id);
     })
@@ -843,7 +857,11 @@ async fn validate_all_steps_redirects_to_summary() {
 async fn summary_page_shows_review_complete_banner() {
     request::<App, _, _>(|request, ctx| async move {
         let mut session = make_session_with_plan();
-        session.validated_steps = vec![true, true];
+        let mut sv1 = StepValidation::default();
+        sv1.validate_file("src/lib.rs");
+        let mut sv2 = StepValidation::default();
+        sv2.validate_file("src/new.rs");
+        session.validated_steps = vec![sv1, sv2];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
 
@@ -871,7 +889,11 @@ async fn summary_page_shows_review_complete_banner() {
 async fn summary_page_shows_reviewed_changes_section() {
     request::<App, _, _>(|request, ctx| async move {
         let mut session = make_session_with_plan();
-        session.validated_steps = vec![true, true];
+        let mut sv1 = StepValidation::default();
+        sv1.validate_file("src/lib.rs");
+        let mut sv2 = StepValidation::default();
+        sv2.validate_file("src/new.rs");
+        session.validated_steps = vec![sv1, sv2];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
 
@@ -905,7 +927,11 @@ async fn summary_page_shows_reviewed_changes_section() {
 async fn summary_page_hides_start_review_when_complete() {
     request::<App, _, _>(|request, ctx| async move {
         let mut session = make_session_with_plan();
-        session.validated_steps = vec![true, true];
+        let mut sv1 = StepValidation::default();
+        sv1.validate_file("src/lib.rs");
+        let mut sv2 = StepValidation::default();
+        sv2.validate_file("src/new.rs");
+        session.validated_steps = vec![sv1, sv2];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
 
@@ -964,7 +990,11 @@ async fn summary_page_no_reviewed_changes_when_incomplete() {
 async fn summary_page_shows_step_chat_messages() {
     request::<App, _, _>(|request, ctx| async move {
         let mut session = make_session_with_plan();
-        session.validated_steps = vec![true, true];
+        let mut sv1 = StepValidation::default();
+        sv1.validate_file("src/lib.rs");
+        let mut sv2 = StepValidation::default();
+        sv2.validate_file("src/new.rs");
+        session.validated_steps = vec![sv1, sv2];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
 
@@ -1031,7 +1061,9 @@ fn cleanup_repo_session(repo_path: &str, branch: &str) {
 async fn resume_endpoint_redirects_to_first_unvalidated_step() {
     request::<App, _, _>(|request, ctx| async move {
         let mut session = make_session_with_plan();
-        session.validated_steps = vec![true, false];
+        let mut sv_validated = StepValidation::default();
+        sv_validated.validate_file("src/lib.rs");
+        session.validated_steps = vec![sv_validated, StepValidation::default()];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
 
@@ -1053,7 +1085,11 @@ async fn resume_endpoint_redirects_to_first_unvalidated_step() {
 async fn resume_endpoint_redirects_to_guide_when_all_validated() {
     request::<App, _, _>(|request, ctx| async move {
         let mut session = make_session_with_plan();
-        session.validated_steps = vec![true, true];
+        let mut sv1 = StepValidation::default();
+        sv1.validate_file("src/lib.rs");
+        let mut sv2 = StepValidation::default();
+        sv2.validate_file("src/new.rs");
+        session.validated_steps = vec![sv1, sv2];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
 
@@ -1332,13 +1368,19 @@ async fn loading_page_returns_404_for_invalid_session() {
 async fn first_unvalidated_step_returns_correct_step() {
     let mut session = make_session_with_plan();
 
-    session.validated_steps = vec![false, false];
+    session.validated_steps = vec![StepValidation::default(), StepValidation::default()];
     assert_eq!(session.first_unvalidated_step(), Some(1));
 
-    session.validated_steps = vec![true, false];
+    let mut sv_validated = StepValidation::default();
+    sv_validated.validate_file("src/lib.rs");
+    session.validated_steps = vec![sv_validated, StepValidation::default()];
     assert_eq!(session.first_unvalidated_step(), Some(2));
 
-    session.validated_steps = vec![true, true];
+    let mut sv1 = StepValidation::default();
+    sv1.validate_file("src/lib.rs");
+    let mut sv2 = StepValidation::default();
+    sv2.validate_file("src/new.rs");
+    session.validated_steps = vec![sv1, sv2];
     assert_eq!(session.first_unvalidated_step(), None);
 
     cleanup_session(&session.id);

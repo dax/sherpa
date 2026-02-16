@@ -51,10 +51,16 @@
 
             <p class="text-base-content/70 mb-4">{{ step_rationale }}</p>
 
-            <div class="flex flex-wrap gap-2 mb-6">
-                {% for file in step_files %}
-                <span class="badge badge-outline badge-sm font-mono">{{ file }}</span>
+            <div class="flex flex-wrap gap-2 mb-4">
+                {% for fd in file_diffs %}
+                <span class="badge badge-sm font-mono {% if fd.validated %}badge-success{% else %}badge-outline{% endif %}">
+                    {% if fd.validated %}✓{% endif %} {{ fd.path }}
+                </span>
                 {% endfor %}
+            </div>
+
+            <div class="mb-4 text-sm text-base-content/60">
+                <span id="file-progress">{{ validated_file_count }}/{{ total_file_count }}</span> files validated
             </div>
 
             <div class="space-y-4">
@@ -75,9 +81,35 @@
                 {% endif %}
 
                 <div class="card bg-base-100 shadow">
-                    <div class="card-body">
-                        <h2 class="card-title text-lg">Changes</h2>
-                        <div id="diff-container" class="mt-2"></div>
+                    <div class="card-body p-4">
+                        <h2 class="card-title text-lg mb-3">Changes</h2>
+                        <div class="space-y-2">
+                            {% for fd in file_diffs %}
+                            <details id="file-{{ loop.index0 }}" class="bg-base-200 rounded-lg group {% if fd.validated %}opacity-60{% endif %}" {% if not fd.validated %}open{% endif %}>
+                                <summary class="flex items-center gap-2 px-4 py-2 cursor-pointer select-none font-medium">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0 transition-transform group-open:rotate-90" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                                    </svg>
+                                    <span class="font-mono text-sm">{{ fd.path }}</span>
+                                    {% if fd.validated %}
+                                    <span class="badge badge-success badge-xs ml-auto">✓ Validated</span>
+                                    {% else %}
+                                    <form hx-post="/review/{{ session_id }}/guide/step/{{ step_number }}/validate-file"
+                                          hx-target="#file-{{ loop.index0 }}"
+                                          hx-swap="outerHTML"
+                                          class="ml-auto"
+                                          onclick="event.stopPropagation()">
+                                        <input type="hidden" name="file_path" value="{{ fd.path }}" />
+                                        <button type="submit" class="btn btn-success btn-xs">Validate</button>
+                                    </form>
+                                    {% endif %}
+                                </summary>
+                                <div class="px-4 pb-3">
+                                    <div class="diff-file-container" data-diff="{{ fd.diff | json_encode() }}"></div>
+                                </div>
+                            </details>
+                            {% endfor %}
+                        </div>
                     </div>
                 </div>
 
@@ -125,36 +157,26 @@
                 <div></div>
                 {% endif %}
 
-                <div class="flex gap-2">
+                <div id="step-nav" class="flex gap-2 items-center">
                     {% if current_step_validated %}
-                    <span class="badge badge-success badge-lg gap-1 self-center">
+                    <span class="badge badge-success badge-lg gap-1">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                             <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
                         </svg>
-                        Validated
+                        All files validated
                     </span>
                     {% endif %}
 
                     {% if step_number < total_steps %}
-                    <form method="post" action="/review/{{ session_id }}/guide/step/{{ step_number }}/validate">
-                        <button type="submit" class="btn btn-primary btn-sm">
-                            {% if current_step_validated %}
-                            Next Step &rarr;
-                            {% else %}
-                            Validate &amp; Next &rarr;
-                            {% endif %}
-                        </button>
-                    </form>
+                    <a href="/review/{{ session_id }}/guide/step/{{ step_number + 1 }}"
+                       class="btn btn-primary btn-sm {% if not current_step_validated %}btn-disabled{% endif %}">
+                        Next Step &rarr;
+                    </a>
                     {% else %}
-                    <form method="post" action="/review/{{ session_id }}/guide/step/{{ step_number }}/validate">
-                        <button type="submit" class="btn btn-primary btn-sm">
-                            {% if current_step_validated %}
-                            Back to Guide
-                            {% else %}
-                            Validate &amp; Finish
-                            {% endif %}
-                        </button>
-                    </form>
+                    <a href="/review/{{ session_id }}/summary"
+                       class="btn btn-primary btn-sm {% if not current_step_validated %}btn-disabled{% endif %}">
+                        Back to Summary
+                    </a>
                     {% endif %}
                 </div>
             </div>
@@ -166,18 +188,19 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    var diffString = {{ step_diff | json_encode() | safe }};
-    if (diffString && diffString.trim()) {
-        var diffHtml = Diff2Html.html(diffString, {
-            drawFileList: true,
-            matching: 'lines',
-            outputFormat: 'line-by-line',
-            colorScheme: 'dark'
-        });
-        document.getElementById('diff-container').innerHTML = diffHtml;
-    } else {
-        document.getElementById('diff-container').innerHTML = '<p class="text-base-content/50 italic">No diff available for this step</p>';
-    }
+    document.querySelectorAll('.diff-file-container').forEach(function(el) {
+        var diffString = JSON.parse(el.getAttribute('data-diff'));
+        if (diffString && diffString.trim()) {
+            el.innerHTML = Diff2Html.html(diffString, {
+                drawFileList: false,
+                matching: 'lines',
+                outputFormat: 'line-by-line',
+                colorScheme: 'dark'
+            });
+        } else {
+            el.innerHTML = '<p class="text-base-content/50 italic">No diff available</p>';
+        }
+    });
 
     var chatHistory = document.getElementById('step-chat-history');
     if (chatHistory) {
