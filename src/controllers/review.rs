@@ -199,11 +199,41 @@ fn synthesize_approach_from_plan(session: &ReviewSession) -> String {
     markdown::to_html(&md)
 }
 
+fn format_user_chat_content(content: &str) -> String {
+    if let Some(rest) = content.strip_prefix("\u{1f4cd} ") {
+        if let Some((ref_line, question)) = rest.split_once("\n\n") {
+            let escaped_ref = ref_line
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            let escaped_q = question
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            let (file_attr, range_attr) = if let Some((fp, rest)) = ref_line.rsplit_once(" (lines ")
+            {
+                let lr = rest.trim_end_matches(')');
+                (
+                    format!(" data-file-path=\"{}\"", fp.replace('"', "&quot;")),
+                    format!(" data-line-range=\"{}\"", lr.replace('"', "&quot;")),
+                )
+            } else {
+                (String::new(), String::new())
+            };
+            return format!(
+                "<span class=\"sherpa-line-ref\"{file_attr}{range_attr}>\
+                 \u{1f4cd} {escaped_ref}</span><br>{escaped_q}"
+            );
+        }
+    }
+    content.to_string()
+}
+
 fn chat_msg_to_json(msg: &chat_messages::Model, current_step: Option<usize>) -> serde_json::Value {
     let content = if msg.role == "assistant" {
         markdown::to_html(&msg.content)
     } else {
-        msg.content.clone()
+        format_user_chat_content(&msg.content)
     };
     let step_number = msg.step_number;
     let timestamp = msg.created_at.format("%H:%M:%S").to_string();
@@ -213,6 +243,7 @@ fn chat_msg_to_json(msg: &chat_messages::Model, current_step: Option<usize>) -> 
         "timestamp": timestamp,
         "step_number": step_number,
         "is_current_step": current_step.is_some() && step_number == current_step.map(|n| n as i32),
+        "id": msg.id,
     })
 }
 
@@ -359,6 +390,14 @@ async fn section_skip(
 #[derive(Deserialize)]
 pub struct ChatForm {
     message: String,
+}
+
+#[derive(Deserialize)]
+pub struct LineChatForm {
+    message: String,
+    file_path: String,
+    selected_lines: String,
+    line_range: String,
 }
 
 #[debug_handler]
@@ -1317,6 +1356,124 @@ async fn step_chat(
     )
 }
 
+#[debug_handler]
+async fn step_line_chat(
+    ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
+    Path((session_id, step_number)): Path<(String, usize)>,
+    Form(form): Form<LineChatForm>,
+) -> Result<Response> {
+    let (model, session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let session_db_id = model.id;
+
+    let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
+    if step_number < 1 || step_number > plan.steps.len() {
+        return Err(Error::NotFound);
+    }
+
+    let idx = step_number - 1;
+    let step = &plan.steps[idx];
+    let step_title = step.title.clone();
+
+    let explanation = ai_analyses::find_cached(
+        &ctx.db,
+        session_db_id,
+        "step_explanation",
+        Some(step_number as i32),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error loading step explanation for line chat context: {e}");
+        Error::InternalServerError
+    })?
+    .unwrap_or_default();
+
+    let is_live = session.is_live();
+    let step_diff = if is_live {
+        step.step_diff.clone().unwrap_or_default()
+    } else {
+        let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
+            .file_refs
+            .iter()
+            .map(|f| (f.path.clone(), f.diff_lines))
+            .collect();
+        git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples)
+    };
+
+    let display_message = format!(
+        "\u{1f4cd} {} (lines {})\n\n{}",
+        form.file_path, form.line_range, form.message
+    );
+
+    let user_msg_model = chat_messages::create(
+        &ctx.db,
+        session_db_id,
+        Some(step_number as i32),
+        "user",
+        &display_message,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error saving user line chat message: {e}");
+        Error::InternalServerError
+    })?;
+
+    let settings = load_ai_settings();
+    let ai_response = if let Some(settings) = settings {
+        let context = build_ai_context(&session);
+        let instruction = ai_cli::line_chat_instruction(
+            &step_title,
+            &form.file_path,
+            &form.selected_lines,
+            &step_diff,
+            &explanation,
+            &form.message,
+        );
+        let primed = build_primed_session(&session);
+        match generate_with_fork_or_fallback(
+            &settings,
+            primed.as_ref(),
+            &instruction,
+            &context,
+            ModelTier::Fast,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(e) => {
+                log_ai_error(&e);
+                format!("AI error: {e}")
+            }
+        }
+    } else {
+        "No AI backend configured. Please set up an AI backend first.".to_string()
+    };
+
+    let ai_msg_model = chat_messages::create(
+        &ctx.db,
+        session_db_id,
+        Some(step_number as i32),
+        "assistant",
+        &ai_response,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("DB error saving AI line chat message: {e}");
+        Error::InternalServerError
+    })?;
+
+    let last_two: Vec<serde_json::Value> = vec![
+        chat_msg_to_json(&user_msg_model, Some(step_number)),
+        chat_msg_to_json(&ai_msg_model, Some(step_number)),
+    ];
+
+    format::render().view(
+        &v,
+        "review/_step_chat_messages.html",
+        data!({"messages": last_two, "current_step": step_number}),
+    )
+}
+
 #[derive(Deserialize)]
 pub struct ValidateFileForm {
     file_path: String,
@@ -1551,6 +1708,10 @@ pub fn page_routes() -> Routes {
         .add(
             "/{session_id}/guide/step/{step_number}/chat",
             post(step_chat),
+        )
+        .add(
+            "/{session_id}/guide/step/{step_number}/line-chat",
+            post(step_line_chat),
         )
         .add(
             "/{session_id}/guide/step/{step_number}/validate",

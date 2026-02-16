@@ -200,7 +200,7 @@
                                     {% endif %}
                                 </summary>
                                 <div class="px-2 sm:px-4 pb-3 overflow-x-auto">
-                                    <div class="diff-file-container" data-diff="{{ fd.diff | json_encode() }}"></div>
+                                    <div class="diff-file-container" data-diff="{{ fd.diff | json_encode() }}" data-file-path="{{ fd.path }}"></div>
                                 </div>
                             </details>
                             {% endfor %}
@@ -211,14 +211,17 @@
                 <div class="card bg-base-100 shadow">
                     <div class="card-body">
                         <h2 class="card-title text-lg">Chat</h2>
-                        <div id="step-chat-history" class="space-y-3 max-h-[50vh] sm:max-h-96 overflow-y-auto">
+                        <div id="step-chat-history" class="space-y-3 max-h-[50vh] sm:max-h-96 overflow-y-auto overflow-x-hidden">
                             {% for msg in chat_messages %}
-                            <div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %} {% if msg.is_current_step %}{% else %}opacity-50{% endif %}">
-                                <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
+                            <div id="chat-msg-{{ msg.id }}" class="{% if msg.role == 'user' %}chat chat-sender{% else %}chat chat-receiver{% endif %} {% if msg.is_current_step %}{% else %}opacity-50{% endif %}">
+                                <div class="chat-header text-xs text-base-content/50 mb-0.5">
+                                    {% if msg.role == 'user' %}You{% else %}Sherpa AI{% endif %}
+                                </div>
+                                <div class="chat-bubble">
                                     {% if msg.role == 'user' %}
                                     {{ msg.content | safe }}
                                     {% else %}
-                                    <div class="prose prose-sm max-w-none">{{ msg.content | safe }}</div>
+                                    <div class="prose max-w-none">{{ msg.content | safe }}</div>
                                     {% endif %}
                                 </div>
                                 <div class="chat-footer text-xs text-base-content/50">
@@ -305,6 +308,7 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // --- Diff rendering ---
     document.querySelectorAll('.diff-file-container').forEach(function(el) {
         var diffString = JSON.parse(el.getAttribute('data-diff'));
         if (diffString && diffString.trim()) {
@@ -314,6 +318,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 outputFormat: 'line-by-line',
                 colorScheme: 'dark'
             });
+            initLineSelection(el);
         } else {
             el.innerHTML = '<p class="text-base-content/50 italic">No diff available</p>';
         }
@@ -323,6 +328,359 @@ document.addEventListener('DOMContentLoaded', function() {
     if (chatHistory) {
         chatHistory.scrollTop = chatHistory.scrollHeight;
     }
+
+    // --- Bidirectional chat ↔ diff linking ---
+    function findDiffRowByFileLine(filePath, lineNum) {
+        var containers = document.querySelectorAll('.diff-file-container');
+        for (var i = 0; i < containers.length; i++) {
+            if (containers[i].getAttribute('data-file-path') !== filePath) continue;
+            var rows = containers[i].querySelectorAll('.d2h-diff-tbody tr');
+            for (var j = 0; j < rows.length; j++) {
+                var num2 = rows[j].querySelector('.line-num2');
+                var num1 = rows[j].querySelector('.line-num1');
+                var n = (num2 && num2.textContent.trim()) ||
+                        (num1 && num1.textContent.trim());
+                if (n === String(lineNum)) return { row: rows[j], container: containers[i] };
+            }
+        }
+        return null;
+    }
+
+    function flashRows(filePath, lineRange) {
+        var parts = lineRange.split('-');
+        var startLine = parseInt(parts[0], 10);
+        var endLine = parts.length > 1 ? parseInt(parts[1], 10) : startLine;
+        for (var ln = startLine; ln <= endLine; ln++) {
+            var found = findDiffRowByFileLine(filePath, ln);
+            if (found) {
+                found.row.classList.remove('sherpa-line-flash');
+                void found.row.offsetWidth;
+                found.row.classList.add('sherpa-line-flash');
+            }
+        }
+        var first = findDiffRowByFileLine(filePath, startLine);
+        if (first) {
+            var details = first.container.closest('details');
+            if (details && !details.open) details.open = true;
+            first.row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }
+
+    function initChatDiffLinks(root) {
+        var refs = (root || document).querySelectorAll('.sherpa-line-ref[data-file-path]');
+        refs.forEach(function(ref) {
+            if (ref.dataset.linked) return;
+            ref.dataset.linked = '1';
+            ref.addEventListener('click', function(e) {
+                e.preventDefault();
+                flashRows(ref.dataset.filePath, ref.dataset.lineRange);
+            });
+        });
+    }
+
+    function annotateDiscussedLines() {
+        document.querySelectorAll('.sherpa-diff-annotation').forEach(function(a) { a.remove(); });
+        var refs = document.querySelectorAll('#step-chat-history .sherpa-line-ref[data-file-path]');
+        var seen = {};
+        refs.forEach(function(ref) {
+            var chatMsg = ref.closest('[id^="chat-msg-"]');
+            if (!chatMsg) return;
+            var fp = ref.dataset.filePath;
+            var lr = ref.dataset.lineRange;
+            var startLine = parseInt(lr.split('-')[0], 10);
+            var key = fp + ':' + startLine;
+            if (seen[key]) return;
+            seen[key] = true;
+
+            var found = findDiffRowByFileLine(fp, startLine);
+            if (!found) return;
+            var cell = found.row.querySelector('.d2h-code-linenumber') ||
+                       found.row.querySelector('td:first-child');
+            if (!cell) return;
+            cell.style.position = 'relative';
+            var icon = document.createElement('span');
+            icon.className = 'sherpa-diff-annotation';
+            icon.title = 'Jump to chat discussion';
+            icon.textContent = '💬';
+            icon.dataset.chatTarget = chatMsg.id;
+            icon.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var target = document.getElementById(this.dataset.chatTarget);
+                if (!target) return;
+                var chatBox = document.getElementById('step-chat-history');
+                if (chatBox) {
+                    chatBox.closest('.card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    setTimeout(function() {
+                        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        target.classList.remove('sherpa-line-flash');
+                        void target.offsetWidth;
+                        target.classList.add('sherpa-line-flash');
+                    }, 300);
+                }
+            });
+            cell.appendChild(icon);
+        });
+    }
+
+    initChatDiffLinks();
+    annotateDiscussedLines();
+
+    document.body.addEventListener('htmx:afterSwap', function(e) {
+        if (e.detail.target && e.detail.target.id === 'step-chat-history') {
+            initChatDiffLinks(e.detail.target);
+            annotateDiscussedLines();
+        }
+    });
+
+    // --- Line selection state ---
+    var activePopover = null;
+
+    function initLineSelection(container) {
+        var lastClickedIndex = null;
+        var rows = container.querySelectorAll('.d2h-diff-tbody tr');
+
+        rows.forEach(function(row) {
+            // Skip hunk header rows
+            if (row.querySelector('.d2h-info')) return;
+            row.classList.add('sherpa-line-selectable');
+
+            row.addEventListener('click', function(e) {
+                // Don't interfere with text selection
+                if (window.getSelection().toString().length > 0) return;
+
+                var selectableRows = getSelectableRows(container);
+                var clickedIndex = selectableRows.indexOf(row);
+                if (clickedIndex === -1) return;
+
+                if (e.shiftKey && lastClickedIndex !== null) {
+                    // Range selection
+                    var start = Math.min(lastClickedIndex, clickedIndex);
+                    var end = Math.max(lastClickedIndex, clickedIndex);
+                    selectableRows.forEach(function(r, i) {
+                        if (i >= start && i <= end) {
+                            r.classList.add('sherpa-line-selected');
+                        }
+                    });
+                } else if (e.metaKey || e.ctrlKey) {
+                    // Toggle individual line (multi-select)
+                    row.classList.toggle('sherpa-line-selected');
+                } else {
+                    // Single click: clear others in this file, toggle this one
+                    var wasSelected = row.classList.contains('sherpa-line-selected');
+                    clearSelection(container);
+                    if (!wasSelected) {
+                        row.classList.add('sherpa-line-selected');
+                    }
+                }
+
+                lastClickedIndex = clickedIndex;
+                updatePopover(container);
+            });
+        });
+    }
+
+    function getSelectableRows(container) {
+        return Array.from(
+            container.querySelectorAll('.d2h-diff-tbody tr.sherpa-line-selectable')
+        );
+    }
+
+    function getSelectedRows(container) {
+        return Array.from(
+            container.querySelectorAll('.d2h-diff-tbody tr.sherpa-line-selected')
+        );
+    }
+
+    function clearSelection(container) {
+        container.querySelectorAll('.sherpa-line-selected').forEach(function(r) {
+            r.classList.remove('sherpa-line-selected');
+        });
+    }
+
+    function clearAllSelections() {
+        document.querySelectorAll('.sherpa-line-selected').forEach(function(r) {
+            r.classList.remove('sherpa-line-selected');
+        });
+    }
+
+    function extractSelectionData(container) {
+        var selected = getSelectedRows(container);
+        if (selected.length === 0) return null;
+
+        var filePath = container.getAttribute('data-file-path') || 'unknown';
+        var lines = [];
+        var lineNumbers = [];
+
+        selected.forEach(function(row) {
+            var num1 = row.querySelector('.line-num1');
+            var num2 = row.querySelector('.line-num2');
+            var content = row.querySelector('.d2h-code-line');
+            var prefix = row.querySelector('.d2h-code-line-prefix');
+            var ctn = row.querySelector('.d2h-code-line-ctn');
+
+            var lineNum = (num2 && num2.textContent.trim()) ||
+                          (num1 && num1.textContent.trim()) || '?';
+            if (lineNum) lineNumbers.push(lineNum);
+
+            var lineText = (prefix ? prefix.textContent : '') +
+                           (ctn ? ctn.textContent : '');
+            lines.push(lineText);
+        });
+
+        var rangeStr = lineNumbers.length === 1
+            ? lineNumbers[0]
+            : lineNumbers[0] + '-' + lineNumbers[lineNumbers.length - 1];
+
+        return {
+            filePath: filePath,
+            selectedLines: lines.join('\n'),
+            lineRange: rangeStr,
+            lineCount: selected.length
+        };
+    }
+
+    // --- Popover management ---
+    function removePopover() {
+        if (activePopover) {
+            activePopover.remove();
+            activePopover = null;
+        }
+    }
+
+    function updatePopover(container) {
+        removePopover();
+        var selected = getSelectedRows(container);
+        if (selected.length === 0) return;
+
+        var lastRow = selected[selected.length - 1];
+        var data = extractSelectionData(container);
+        if (!data) return;
+
+        // Create popover element
+        var popover = document.createElement('div');
+        popover.className = 'sherpa-line-popover';
+        popover.innerHTML =
+            '<div class="text-xs text-base-content/60 mb-1">' +
+                '<span class="font-mono">' + escapeHtml(data.filePath) + '</span> · ' +
+                data.lineCount + ' line' + (data.lineCount !== 1 ? 's' : '') +
+                ' (L' + escapeHtml(data.lineRange) + ')' +
+            '</div>' +
+            '<div class="popover-actions">' +
+                '<button class="btn btn-primary btn-sm flex-1" data-action="explain">' +
+                    'Explain this change' +
+                '</button>' +
+                '<button class="btn btn-secondary btn-sm flex-1" data-action="ask">' +
+                    'Ask a question' +
+                '</button>' +
+            '</div>' +
+            '<div class="popover-question" style="display:none">' +
+                '<input type="text" class="input input-bordered input-sm flex-1 bg-base-100" ' +
+                    'placeholder="What would you like to know?" autocomplete="off" />' +
+                '<button class="btn btn-primary btn-sm" data-action="submit-question">' +
+                    'Send' +
+                '</button>' +
+            '</div>';
+
+        // Position below the last selected row, clamped within container
+        container.style.position = 'relative';
+        container.appendChild(popover);
+
+        var rowRect = lastRow.getBoundingClientRect();
+        var containerRect = container.getBoundingClientRect();
+        var popoverWidth = popover.offsetWidth;
+        var topPos = rowRect.bottom - containerRect.top + 4;
+
+        // Center horizontally but clamp to stay within container bounds
+        var idealLeft = (rowRect.left - containerRect.left) +
+                        (rowRect.width / 2) - (popoverWidth / 2);
+        var maxLeft = containerRect.width - popoverWidth - 8;
+        var clampedLeft = Math.max(8, Math.min(idealLeft, maxLeft));
+
+        popover.style.top = topPos + 'px';
+        popover.style.left = clampedLeft + 'px';
+
+        activePopover = popover;
+
+        // Popover event handlers
+        popover.querySelector('[data-action="explain"]').addEventListener('click', function() {
+            submitLineChat(data, 'Explain this change');
+        });
+
+        popover.querySelector('[data-action="ask"]').addEventListener('click', function() {
+            var actions = popover.querySelector('.popover-actions');
+            var questionRow = popover.querySelector('.popover-question');
+            actions.style.display = 'none';
+            questionRow.style.display = 'flex';
+            var input = questionRow.querySelector('input');
+            input.focus();
+        });
+
+        var questionInput = popover.querySelector('.popover-question input');
+        questionInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && this.value.trim()) {
+                submitLineChat(data, this.value.trim());
+            }
+        });
+
+        popover.querySelector('[data-action="submit-question"]').addEventListener('click', function() {
+            var val = questionInput.value.trim();
+            if (val) submitLineChat(data, val);
+        });
+    }
+
+    function submitLineChat(data, message) {
+        var url = '/review/{{ session_id }}/guide/step/{{ step_number }}/line-chat';
+        var body = new URLSearchParams({
+            message: message,
+            file_path: data.filePath,
+            selected_lines: data.selectedLines,
+            line_range: data.lineRange
+        });
+
+        // Show spinner in chat
+        var spinner = document.getElementById('step-chat-spinner');
+        if (spinner) spinner.style.opacity = '1';
+
+        removePopover();
+        clearAllSelections();
+
+        // Scroll to chat
+        var chatCard = document.getElementById('step-chat-history');
+        if (chatCard) {
+            chatCard.closest('.card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        htmx.ajax('POST', url, {
+            target: '#step-chat-history',
+            swap: 'beforeend',
+            values: Object.fromEntries(body),
+        }).then(function() {
+            if (spinner) spinner.style.opacity = '0';
+            if (chatCard) chatCard.scrollTop = chatCard.scrollHeight;
+        });
+    }
+
+    function escapeHtml(str) {
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(str));
+        return div.innerHTML;
+    }
+
+    // Dismiss popover on Escape or click outside
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && activePopover) {
+            removePopover();
+            clearAllSelections();
+        }
+    });
+
+    document.addEventListener('click', function(e) {
+        if (activePopover && !activePopover.contains(e.target) &&
+            !e.target.closest('.sherpa-line-selectable')) {
+            removePopover();
+            clearAllSelections();
+        }
+    });
 });
 </script>
 {% endblock %}

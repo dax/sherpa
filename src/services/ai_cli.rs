@@ -228,6 +228,32 @@ pub fn step_chat_instruction(
     )
 }
 
+pub fn line_chat_instruction(
+    step_title: &str,
+    file_path: &str,
+    selected_lines: &str,
+    step_diff: &str,
+    explanation: &str,
+    user_message: &str,
+) -> String {
+    let explanation_section = if explanation.is_empty() {
+        String::new()
+    } else {
+        format!("\nExplanation of this step:\n{explanation}\n")
+    };
+    format!(
+        "You are helping a reviewer who is on step \"{step_title}\".\n\n\
+         Full diff for this step:\n```\n{step_diff}\n```\n\
+         {explanation_section}\n\
+         The reviewer selected these specific lines from file `{file_path}`:\n\
+         ```\n{selected_lines}\n```\n\n\
+         The reviewer asks: {user_message}\n\n\
+         Focus your answer on the selected lines. Reference the surrounding diff context \
+         when helpful. Be concise and specific.\n\
+         Output ONLY the answer. No thinking, reasoning, reflection, or preamble."
+    )
+}
+
 pub fn extract_json_from_response(raw: &str) -> Result<String, String> {
     if serde_json::from_str::<serde_json::Value>(raw).is_ok() {
         return Ok(raw.to_string());

@@ -1,10 +1,13 @@
 {% for msg in messages %}
-<div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %} {% if msg.is_current_step is defined and msg.is_current_step %}{% else %}opacity-50{% endif %}">
-    <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
+<div id="chat-msg-{{ msg.id }}" class="{% if msg.role == 'user' %}chat chat-sender{% else %}chat chat-receiver{% endif %} {% if msg.is_current_step is defined and msg.is_current_step %}{% else %}opacity-50{% endif %}">
+    <div class="chat-header text-xs text-base-content/50 mb-0.5">
+        {% if msg.role == 'user' %}You{% else %}Sherpa AI{% endif %}
+    </div>
+    <div class="chat-bubble">
         {% if msg.role == 'user' %}
         {{ msg.content | safe }}
         {% else %}
-        <div class="prose prose-sm max-w-none">{{ msg.content | safe }}</div>
+        <div class="prose max-w-none">{{ msg.content | safe }}</div>
         {% endif %}
     </div>
     <div class="chat-footer text-xs text-base-content/50">

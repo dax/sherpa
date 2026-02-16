@@ -102,12 +102,15 @@
                                 <h4 class="text-sm font-semibold text-base-content/70 mb-1">Chat Messages</h4>
                                 <div class="space-y-2">
                                     {% for msg in step.chat_messages %}
-                                    <div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %}">
-                                        <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
+                                    <div class="{% if msg.role == 'user' %}chat chat-sender{% else %}chat chat-receiver{% endif %}">
+                                        <div class="chat-header text-xs text-base-content/50 mb-0.5">
+                                            {% if msg.role == 'user' %}You{% else %}Sherpa AI{% endif %}
+                                        </div>
+                                        <div class="chat-bubble">
                                             {% if msg.role == 'user' %}
                                             {{ msg.content | safe }}
                                             {% else %}
-                                            <div class="prose prose-sm max-w-none">{{ msg.content | safe }}</div>
+                                            <div class="prose max-w-none">{{ msg.content | safe }}</div>
                                             {% endif %}
                                         </div>
                                         <div class="chat-footer text-xs text-base-content/50">{{ msg.timestamp }}</div>
@@ -128,15 +131,18 @@
     <div class="card bg-base-100 shadow mt-6">
         <div class="card-body">
             <h2 class="card-title text-lg">Chat</h2>
-            <div id="chat-history" class="space-y-3 max-h-[50vh] sm:max-h-96 overflow-y-auto">
+            <div id="chat-history" class="space-y-3 max-h-[50vh] sm:max-h-96 overflow-y-auto overflow-x-hidden">
                 {% for msg in chat_messages %}
                 <div class="chat {{ msg.role }}">
-                    <div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %}">
-                        <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
+                    <div class="{% if msg.role == 'user' %}chat chat-sender{% else %}chat chat-receiver{% endif %}">
+                        <div class="chat-header text-xs text-base-content/50 mb-0.5">
+                            {% if msg.role == 'user' %}You{% else %}Sherpa AI{% endif %}
+                        </div>
+                        <div class="chat-bubble">
                             {% if msg.role == 'user' %}
                             {{ msg.content | safe }}
                             {% else %}
-                            <div class="prose prose-sm max-w-none">{{ msg.content | safe }}</div>
+                            <div class="prose max-w-none">{{ msg.content | safe }}</div>
                             {% endif %}
                         </div>
                         <div class="chat-footer text-xs text-base-content/50">{{ msg.timestamp }}</div>
