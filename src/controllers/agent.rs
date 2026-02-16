@@ -239,7 +239,6 @@ async fn create_session(
             tracing::error!("DB error creating agent session: {e}");
             Error::InternalServerError
         })?;
-    let _ = session.save();
 
     let review_url = format!("/review/{session_id}/guide");
     let resp = CreateSessionResponse {
@@ -258,13 +257,9 @@ async fn feedback(
     Path(session_id): Path<String>,
     Query(query): Query<FeedbackQuery>,
 ) -> Result<Response> {
-    let (model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let (model, session) = load_session_from_db(&ctx.db, &session_id).await?;
     validate_session_token(&headers, &session)?;
     let session_db_id = model.id;
-
-    if let Ok(file_session) = ReviewSession::load(&session_id) {
-        session.block_agent = file_session.block_agent;
-    }
 
     let messages = if let Some(since_str) = &query.since {
         let since_dt = parse_timestamp(since_str).ok_or_else(|| {
@@ -408,8 +403,6 @@ async fn push_step(
             Error::InternalServerError
         })?;
 
-    let _ = session.save();
-
     let port = std::env::var("PORT").unwrap_or_else(|_| "5150".to_string());
     let resp = PushStepResponse {
         step_number,
@@ -512,8 +505,6 @@ async fn complete_step(
             Error::InternalServerError
         })?;
 
-    let _ = session.save();
-
     background_analysis::spawn_live_step_analyses(
         ctx.db.clone(),
         session_db_id,
@@ -549,7 +540,6 @@ async fn fresh_session(
             tracing::error!("DB error deleting session for fresh start: {e}");
             Error::InternalServerError
         })?;
-    let _ = ReviewSession::delete_repo_session(&session.repo_path, &session.branch);
 
     if body.plan.steps.is_empty() {
         return Err(Error::BadRequest("Plan must have at least one step".into()));
@@ -588,7 +578,6 @@ async fn fresh_session(
             tracing::error!("DB error creating fresh agent session: {e}");
             Error::InternalServerError
         })?;
-    let _ = new_session.save();
 
     let review_url = format!("/review/{new_session_id}/guide");
     let resp = FreshSessionResponse {
@@ -678,8 +667,6 @@ async fn update_plan(
             tracing::error!("DB error updating validated_steps for session {session_id}: {e}");
             Error::InternalServerError
         })?;
-
-    let _ = session.save();
 
     let resp = UpdatePlanResponse {
         total_steps: total,

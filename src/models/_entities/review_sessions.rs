@@ -25,6 +25,7 @@ pub struct Model {
     pub primed_session_id: Option<String>,
     pub review_mode: String,
     pub agent_token: Option<String>,
+    pub block_agent: Option<bool>,
     pub created_at: DateTime,
     pub updated_at: DateTime,
 }

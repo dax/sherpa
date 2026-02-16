@@ -100,11 +100,6 @@ pub fn spawn_all_analyses(db: DatabaseConnection, session_db_id: i32, session: R
                 )
                 .await;
 
-                if let Ok(mut file_session) = ReviewSession::load(&session_for_spawn.id) {
-                    file_session.primed_session_id = Some(primed.session_id.clone());
-                    let _ = file_session.save();
-                }
-
                 spawn_forked_analyses(db_for_spawn, session_db_id, session_for_spawn, primed).await;
             }
             Err(e) => {
@@ -253,11 +248,6 @@ async fn spawn_forked_plan_and_steps(
                         return;
                     }
 
-                    if let Ok(mut file_session) = ReviewSession::load(&session.id) {
-                        file_session.review_plan = Some(plan.clone());
-                        let _ = file_session.save();
-                    }
-
                     tracing::info!(
                         "Background review_plan: completed via fork with {} steps",
                         plan.steps.len()
@@ -290,6 +280,11 @@ async fn spawn_forked_plan_and_steps(
             .await;
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+struct ReviewPlanResponse {
+    steps: Vec<ReviewStep>,
 }
 
 fn spawn_forked_step_explanations(
@@ -502,11 +497,6 @@ async fn spawn_review_plan_and_steps(
                         return;
                     }
 
-                    if let Ok(mut file_session) = ReviewSession::load(&session.id) {
-                        file_session.review_plan = Some(plan.clone());
-                        let _ = file_session.save();
-                    }
-
                     tracing::info!(
                         "Background review_plan: completed with {} steps, spawning step explanations",
                         plan.steps.len()
@@ -539,11 +529,6 @@ async fn spawn_review_plan_and_steps(
             .await;
         }
     }
-}
-
-#[derive(serde::Deserialize)]
-struct ReviewPlanResponse {
-    steps: Vec<ReviewStep>,
 }
 
 fn spawn_step_explanations(

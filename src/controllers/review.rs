@@ -11,9 +11,7 @@ use crate::services::{
     background_analysis,
     config::SherpaConfig,
     git_analysis, markdown,
-    review_session::{
-        fallback_review_plan, ChatMessage, ReviewPlan, ReviewSession, ReviewStep, StepStatus,
-    },
+    review_session::{fallback_review_plan, ReviewPlan, ReviewSession, ReviewStep, StepStatus},
 };
 
 fn load_ai_settings() -> Option<AiSettings> {
@@ -370,7 +368,7 @@ async fn summary_chat(
     Path(session_id): Path<String>,
     Form(form): Form<ChatForm>,
 ) -> Result<Response> {
-    let (model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let (model, session) = load_session_from_db(&ctx.db, &session_id).await?;
     let session_db_id = model.id;
 
     let user_msg_model = chat_messages::create(&ctx.db, session_db_id, None, "user", &form.message)
@@ -379,14 +377,6 @@ async fn summary_chat(
             tracing::error!("DB error saving user chat message: {e}");
             Error::InternalServerError
         })?;
-
-    let user_msg = ChatMessage {
-        role: "user".to_string(),
-        content: form.message.clone(),
-        timestamp: chrono_now(),
-        step_number: None,
-    };
-    session.chat_messages.push(user_msg);
 
     let settings = load_ai_settings();
     let ai_response = if let Some(settings) = settings {
@@ -422,15 +412,6 @@ async fn summary_chat(
                 tracing::error!("DB error saving AI chat message: {e}");
                 Error::InternalServerError
             })?;
-
-    let ai_msg = ChatMessage {
-        role: "assistant".to_string(),
-        content: ai_response,
-        timestamp: chrono_now(),
-        step_number: None,
-    };
-    session.chat_messages.push(ai_msg);
-    let _ = session.save();
 
     let last_two: Vec<serde_json::Value> = vec![
         chat_msg_to_json(&user_msg_model, None),
@@ -497,11 +478,6 @@ async fn guide_start(
                             Error::InternalServerError
                         })?;
 
-                    if let Ok(mut file_session) = ReviewSession::load(&session_id) {
-                        file_session.review_plan = Some(plan);
-                        let _ = file_session.save();
-                    }
-
                     format::render().redirect(&format!("/review/{session_id}/guide/step/1"))
                 }
                 Err(error) => format::render().view(
@@ -549,11 +525,6 @@ async fn guide_plan_skip(
             tracing::error!("DB error saving fallback review plan: {e}");
             Error::InternalServerError
         })?;
-
-    if let Ok(mut file_session) = ReviewSession::load(&session_id) {
-        file_session.review_plan = Some(plan);
-        let _ = file_session.save();
-    }
 
     format::render().redirect(&format!("/review/{session_id}/guide/step/1"))
 }
@@ -1079,15 +1050,6 @@ async fn step_explanation(
                 Error::InternalServerError
             })?;
 
-            if let Ok(mut file_session) = ReviewSession::load(&session_id) {
-                if let Some(ref mut plan) = file_session.review_plan {
-                    if let Some(step) = plan.steps.get_mut(idx) {
-                        step.ai_data.explanation = Some(content.clone());
-                    }
-                }
-                let _ = file_session.save();
-            }
-
             let html_content = markdown::to_html(&content);
             format::render().view(
                 &v,
@@ -1209,15 +1171,6 @@ async fn step_relation(
                 Error::InternalServerError
             })?;
 
-            if let Ok(mut file_session) = ReviewSession::load(&session_id) {
-                if let Some(ref mut plan) = file_session.review_plan {
-                    if let Some(step) = plan.steps.get_mut(idx) {
-                        step.ai_data.relation_to_previous = Some(content.clone());
-                    }
-                }
-                let _ = file_session.save();
-            }
-
             let html_content = markdown::to_html(&content);
             format::render().view(
                 &v,
@@ -1250,7 +1203,7 @@ async fn step_chat(
     Path((session_id, step_number)): Path<(String, usize)>,
     Form(form): Form<ChatForm>,
 ) -> Result<Response> {
-    let (model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let (model, session) = load_session_from_db(&ctx.db, &session_id).await?;
     let session_db_id = model.id;
 
     let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
@@ -1300,14 +1253,6 @@ async fn step_chat(
         Error::InternalServerError
     })?;
 
-    let user_msg = ChatMessage {
-        role: "user".to_string(),
-        content: form.message.clone(),
-        timestamp: chrono_now(),
-        step_number: Some(step_number),
-    };
-    session.chat_messages.push(user_msg);
-
     let settings = load_ai_settings();
     let ai_response = if let Some(settings) = settings {
         let context = build_ai_context(&session);
@@ -1345,15 +1290,6 @@ async fn step_chat(
         tracing::error!("DB error saving AI step chat message: {e}");
         Error::InternalServerError
     })?;
-
-    let ai_msg = ChatMessage {
-        role: "assistant".to_string(),
-        content: ai_response,
-        timestamp: chrono_now(),
-        step_number: Some(step_number),
-    };
-    session.chat_messages.push(ai_msg);
-    let _ = session.save();
 
     let last_two: Vec<serde_json::Value> = vec![
         chat_msg_to_json(&user_msg_model, Some(step_number)),
@@ -1401,9 +1337,12 @@ async fn step_request_revision(
     }
 
     plan.steps[idx].status = StepStatus::NeedsRevision;
-    if form.block.is_some() {
+    let block_agent = if form.block.is_some() {
         session.block_agent = Some(true);
-    }
+        Some(true)
+    } else {
+        None
+    };
 
     let plan_json = serde_json::to_string(&session.review_plan).ok();
     review_sessions::update_review_plan(&ctx.db, &session_id, plan_json)
@@ -1413,7 +1352,14 @@ async fn step_request_revision(
             Error::InternalServerError
         })?;
 
-    let _ = session.save();
+    if block_agent.is_some() {
+        review_sessions::update_block_agent(&ctx.db, &session_id, block_agent)
+            .await
+            .map_err(|e| {
+                tracing::error!("DB error saving block_agent: {e}");
+                Error::InternalServerError
+            })?;
+    }
 
     format::render().redirect(&format!("/review/{session_id}/guide/step/{step_number}"))
 }
@@ -1445,8 +1391,6 @@ async fn step_validate_file(
             tracing::error!("DB error saving validated steps: {e}");
             Error::InternalServerError
         })?;
-
-    let _ = session.save();
 
     let current_step_validated = session.is_step_validated(step_number - 1);
     let sv = &session.validated_steps[step_number - 1];
@@ -1509,8 +1453,6 @@ async fn step_validate(
             tracing::error!("DB error saving validated steps: {e}");
             Error::InternalServerError
         })?;
-
-    let _ = session.save();
 
     let all_validated = session.all_steps_validated();
 

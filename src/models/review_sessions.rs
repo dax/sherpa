@@ -74,6 +74,7 @@ impl ActiveModel {
             primed_session_id: Set(session.primed_session_id.clone()),
             review_mode: Set(mode_str.to_string()),
             agent_token: Set(session.agent_token.clone()),
+            block_agent: Set(session.block_agent),
             created_at: Set(now),
             updated_at: Set(now),
         }
@@ -128,7 +129,7 @@ impl Model {
             primed_session_id: self.primed_session_id.clone(),
             review_mode,
             agent_token: self.agent_token.clone(),
-            block_agent: None,
+            block_agent: self.block_agent,
         }
     }
 }
@@ -187,6 +188,22 @@ pub async fn update_diff(
     let now = chrono::Utc::now().naive_utc();
     let mut active: ActiveModel = model.into();
     active.diff = Set(diff.to_string());
+    active.updated_at = Set(now);
+    active.update(db).await?;
+    Ok(())
+}
+
+pub async fn update_block_agent(
+    db: &DatabaseConnection,
+    session_key: &str,
+    block_agent: Option<bool>,
+) -> Result<(), DbErr> {
+    let model = Model::find_by_session_key(db, session_key)
+        .await?
+        .ok_or(DbErr::RecordNotFound("session not found".into()))?;
+    let now = chrono::Utc::now().naive_utc();
+    let mut active: ActiveModel = model.into();
+    active.block_agent = Set(block_agent);
     active.updated_at = Set(now);
     active.update(db).await?;
     Ok(())

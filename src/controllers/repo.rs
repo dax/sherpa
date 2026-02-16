@@ -160,7 +160,6 @@ async fn analyze_submit(
             );
         }
     };
-    let _ = session.save();
 
     background_analysis::spawn_all_analyses(ctx.db.clone(), model.id, session.clone());
 
@@ -206,7 +205,6 @@ async fn fresh_submit(
 ) -> Result<Response> {
     let _ =
         rs_model::Model::delete_by_repo_and_branch(&ctx.db, &form.repo_path, &form.branch).await;
-    let _ = ReviewSession::delete_repo_session(&form.repo_path, &form.branch);
 
     let repo_path = form.repo_path.clone();
     let analysis = match tokio::task::spawn_blocking(move || {
@@ -243,7 +241,6 @@ async fn fresh_submit(
             );
         }
     };
-    let _ = session.save();
 
     background_analysis::spawn_all_analyses(ctx.db.clone(), model.id, session.clone());
 

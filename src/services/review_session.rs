@@ -1,7 +1,4 @@
 use std::collections::HashMap;
-use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -344,76 +341,6 @@ impl ReviewSession {
         (0..plan.steps.len()).all(|i| self.is_step_validated(i))
     }
 
-    pub fn sessions_dir() -> Result<PathBuf, SessionError> {
-        dirs::home_dir()
-            .map(|h| h.join(".sherpa").join("sessions"))
-            .ok_or(SessionError::NoHomeDir)
-    }
-
-    pub fn save(&self) -> Result<(), SessionError> {
-        let dir = Self::sessions_dir()?;
-        fs::create_dir_all(&dir).map_err(SessionError::Io)?;
-
-        let file_path = dir.join(format!("{}.json", self.id));
-        let content = serde_json::to_string_pretty(self).map_err(SessionError::Serialize)?;
-
-        let tmp_path = file_path.with_extension("json.tmp");
-        let mut file = fs::File::create(&tmp_path).map_err(SessionError::Io)?;
-        file.write_all(content.as_bytes())
-            .map_err(SessionError::Io)?;
-        file.sync_all().map_err(SessionError::Io)?;
-        fs::rename(&tmp_path, &file_path).map_err(SessionError::Io)?;
-
-        // Best-effort write to repo-local .sherpa/ directory
-        let _ = self.save_to_repo();
-
-        Ok(())
-    }
-
-    pub fn load(id: &str) -> Result<Self, SessionError> {
-        let dir = Self::sessions_dir()?;
-        let file_path = dir.join(format!("{id}.json"));
-        Self::load_from(&file_path)
-    }
-
-    fn load_from(path: &Path) -> Result<Self, SessionError> {
-        if !path.exists() {
-            return Err(SessionError::NotFound(path.to_string_lossy().to_string()));
-        }
-        let content = fs::read_to_string(path).map_err(SessionError::Io)?;
-        serde_json::from_str(&content).map_err(SessionError::Parse)
-    }
-
-    pub fn save_to_repo(&self) -> Result<(), SessionError> {
-        let file_path = repo_session_path(&self.repo_path, &self.branch);
-        if let Some(parent) = file_path.parent() {
-            fs::create_dir_all(parent).map_err(SessionError::Io)?;
-        }
-
-        let content = serde_json::to_string_pretty(self).map_err(SessionError::Serialize)?;
-        let tmp_path = file_path.with_extension("json.tmp");
-        let mut file = fs::File::create(&tmp_path).map_err(SessionError::Io)?;
-        file.write_all(content.as_bytes())
-            .map_err(SessionError::Io)?;
-        file.sync_all().map_err(SessionError::Io)?;
-        fs::rename(&tmp_path, &file_path).map_err(SessionError::Io)?;
-
-        Ok(())
-    }
-
-    pub fn find_existing(repo_path: &str, branch: &str) -> Option<Self> {
-        let path = repo_session_path(repo_path, branch);
-        Self::load_from(&path).ok()
-    }
-
-    pub fn delete_repo_session(repo_path: &str, branch: &str) -> Result<(), SessionError> {
-        let path = repo_session_path(repo_path, branch);
-        if path.exists() {
-            fs::remove_file(&path).map_err(SessionError::Io)?;
-        }
-        Ok(())
-    }
-
     pub fn first_unvalidated_step(&self) -> Option<usize> {
         self.review_plan.as_ref()?;
         (0..self.validated_steps.len())
@@ -485,50 +412,6 @@ fn days_to_ymd(mut days: i64) -> (i64, u32, u32) {
     (year, m, d)
 }
 
-#[derive(Debug)]
-pub enum SessionError {
-    Io(std::io::Error),
-    Serialize(serde_json::Error),
-    Parse(serde_json::Error),
-    NotFound(String),
-    NoHomeDir,
-}
-
-impl std::fmt::Display for SessionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(e) => write!(f, "session I/O error: {e}"),
-            Self::Serialize(e) => write!(f, "session serialize error: {e}"),
-            Self::Parse(e) => write!(f, "session parse error: {e}"),
-            Self::NotFound(path) => write!(f, "session not found: {path}"),
-            Self::NoHomeDir => write!(f, "could not determine home directory"),
-        }
-    }
-}
-
-impl std::error::Error for SessionError {}
-
-/// Sanitize a git branch name for use as a filename.
-///
-/// Replaces `/` with `--` and strips characters that are invalid in filenames.
-pub fn sanitize_branch_name(branch: &str) -> String {
-    branch
-        .replace('/', "--")
-        .chars()
-        .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == '.')
-        .collect()
-}
-
-/// Return the path to a repo-local session file for the given repo+branch.
-///
-/// The session is stored at `{repo_path}/.sherpa/review-{sanitized_branch}.json`.
-pub fn repo_session_path(repo_path: &str, branch: &str) -> PathBuf {
-    let sanitized = sanitize_branch_name(branch);
-    Path::new(repo_path)
-        .join(".sherpa")
-        .join(format!("review-{sanitized}.json"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -556,36 +439,6 @@ mod tests {
         assert_eq!(session.branch, "feature-branch");
         assert_eq!(session.default_branch, "main");
         assert!(!session.created_at.is_empty());
-    }
-
-    #[test]
-    fn test_save_and_load_roundtrip() {
-        let dir = std::env::temp_dir().join("sherpa_test_sessions_roundtrip");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-
-        let session = ReviewSession::new(make_test_analysis());
-        let file_path = dir.join(format!("{}.json", session.id));
-
-        let content = serde_json::to_string_pretty(&session).unwrap();
-        fs::write(&file_path, content).unwrap();
-
-        let loaded = ReviewSession::load_from(&file_path).unwrap();
-        assert_eq!(loaded.id, session.id);
-        assert_eq!(loaded.repo_path, session.repo_path);
-        assert_eq!(loaded.branch, session.branch);
-        assert_eq!(loaded.changed_files.len(), 1);
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_load_nonexistent_returns_error() {
-        let path = PathBuf::from("/tmp/sherpa_nonexistent_session/does-not-exist.json");
-        let result = ReviewSession::load_from(&path);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(matches!(err, SessionError::NotFound(_)));
     }
 
     #[test]
@@ -667,123 +520,6 @@ mod tests {
         assert_eq!(deserialized.steps[0].file_refs.len(), 2);
         assert_eq!(deserialized.steps[0].file_refs[0].diff_lines, Some((1, 20)));
         assert!(deserialized.steps[0].file_refs[1].diff_lines.is_none());
-    }
-
-    #[test]
-    fn test_session_with_review_plan_roundtrip() {
-        let dir = std::env::temp_dir().join("sherpa_test_sessions_plan");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-
-        let mut session = ReviewSession::new(make_test_analysis());
-        session.review_plan = Some(ReviewPlan {
-            steps: vec![ReviewStep {
-                title: "Test step".to_string(),
-                rationale: "Testing".to_string(),
-                file_refs: vec![FileRef {
-                    path: "file.rs".to_string(),
-                    diff_lines: None,
-                }],
-                ai_data: StepAiData::default(),
-                status: StepStatus::default(),
-                step_diff: None,
-            }],
-            generated_at: "10:00:00".to_string(),
-        });
-
-        let file_path = dir.join(format!("{}.json", session.id));
-        let content = serde_json::to_string_pretty(&session).unwrap();
-        fs::write(&file_path, content).unwrap();
-
-        let loaded = ReviewSession::load_from(&file_path).unwrap();
-        assert!(loaded.review_plan.is_some());
-        let plan = loaded.review_plan.unwrap();
-        assert_eq!(plan.steps.len(), 1);
-        assert_eq!(plan.steps[0].title, "Test step");
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_sanitize_branch_name_simple() {
-        assert_eq!(sanitize_branch_name("main"), "main");
-        assert_eq!(sanitize_branch_name("feature-branch"), "feature-branch");
-    }
-
-    #[test]
-    fn test_sanitize_branch_name_with_slashes() {
-        assert_eq!(sanitize_branch_name("feature/auth"), "feature--auth");
-        assert_eq!(
-            sanitize_branch_name("feature/auth/oauth"),
-            "feature--auth--oauth"
-        );
-    }
-
-    #[test]
-    fn test_sanitize_branch_name_strips_invalid_chars() {
-        assert_eq!(sanitize_branch_name("feat:test"), "feattest");
-        assert_eq!(sanitize_branch_name("my branch"), "mybranch");
-    }
-
-    #[test]
-    fn test_repo_session_path_structure() {
-        let path = repo_session_path("/tmp/my-repo", "feature/auth");
-        assert_eq!(
-            path,
-            PathBuf::from("/tmp/my-repo/.sherpa/review-feature--auth.json")
-        );
-    }
-
-    #[test]
-    fn test_save_to_repo_and_find_existing_roundtrip() {
-        let dir = std::env::temp_dir().join("sherpa_test_repo_local");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-
-        let mut analysis = make_test_analysis();
-        analysis.repo_path = dir.to_string_lossy().to_string();
-        let session = ReviewSession::new(analysis);
-        session.save_to_repo().unwrap();
-
-        let found = ReviewSession::find_existing(&dir.to_string_lossy(), "feature-branch");
-        assert!(found.is_some());
-        let found = found.unwrap();
-        assert_eq!(found.id, session.id);
-        assert_eq!(found.branch, "feature-branch");
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_find_existing_returns_none_for_missing() {
-        let found = ReviewSession::find_existing("/tmp/sherpa_nonexistent_repo", "no-branch");
-        assert!(found.is_none());
-    }
-
-    #[test]
-    fn test_delete_repo_session() {
-        let dir = std::env::temp_dir().join("sherpa_test_delete_repo");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-
-        let mut analysis = make_test_analysis();
-        analysis.repo_path = dir.to_string_lossy().to_string();
-        let session = ReviewSession::new(analysis);
-        session.save_to_repo().unwrap();
-
-        let path = repo_session_path(&dir.to_string_lossy(), "feature-branch");
-        assert!(path.exists());
-
-        ReviewSession::delete_repo_session(&dir.to_string_lossy(), "feature-branch").unwrap();
-        assert!(!path.exists());
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_delete_repo_session_noop_for_missing() {
-        let result = ReviewSession::delete_repo_session("/tmp/sherpa_nonexistent", "no-branch");
-        assert!(result.is_ok());
     }
 
     #[test]
