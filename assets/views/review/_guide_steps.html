@@ -1,0 +1,87 @@
+<div id="guide-steps-list"
+     {% if is_live %}
+     hx-get="/review/{{ session_id }}/guide/steps"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML"
+     {% endif %}>
+
+    {% if is_live %}
+    <div class="flex items-center gap-2 mb-4">
+        <div class="w-full bg-base-300 rounded-full h-2">
+            <div class="bg-primary rounded-full h-2 transition-all duration-500"
+                 style="width: {% if total_steps > 0 %}{{ steps_ready * 100 / total_steps }}{% else %}0{% endif %}%">
+            </div>
+        </div>
+        <span class="text-sm text-base-content/60 whitespace-nowrap">{{ steps_ready }}/{{ total_steps }}</span>
+    </div>
+    {% endif %}
+
+    <div class="space-y-2">
+        {% for step in steps %}
+        <div class="card bg-base-100 shadow-sm">
+            <div class="card-body p-4">
+                <div class="flex items-center gap-3">
+                    <span class="font-mono text-sm text-base-content/50 w-6 text-center">{{ step.number }}</span>
+
+                    {% if step.status == "Reviewed" %}
+                    <span class="badge badge-success badge-sm gap-1">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                        </svg>
+                        Reviewed
+                    </span>
+                    {% elif step.status == "NeedsRevision" %}
+                    <span class="badge badge-warning badge-sm gap-1">Needs Revision</span>
+                    {% elif step.status == "ReadyForReview" %}
+                    <span class="badge badge-accent badge-sm gap-1">
+                        {% if step.is_new %}
+                        <span class="relative flex h-2 w-2">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-2 w-2 bg-accent"></span>
+                        </span>
+                        {% endif %}
+                        Ready for Review
+                    </span>
+                    {% else %}
+                    <span class="badge badge-ghost badge-sm">Planned</span>
+                    {% endif %}
+
+                    <div class="flex-1">
+                        {% if step.status == "Planned" and is_live %}
+                        <span class="font-medium text-base-content/50">{{ step.title }}</span>
+                        {% elif step.status == "NeedsRevision" or step.status == "ReadyForReview" or step.status == "Reviewed" or not is_live %}
+                        <a href="/review/{{ session_id }}/guide/step/{{ step.number }}"
+                           class="font-medium link link-hover">
+                            {{ step.title }}
+                        </a>
+                        {% else %}
+                        <span class="font-medium text-base-content/50">{{ step.title }}</span>
+                        {% endif %}
+                    </div>
+
+                    <span class="text-xs text-base-content/50">
+                        {{ step.file_count }} file{% if step.file_count != 1 %}s{% endif %}
+                    </span>
+
+                    {% if step.status == "Planned" and is_live %}
+                    <span class="text-xs text-base-content/40 italic">Waiting for agent...</span>
+                    {% elif step.status == "NeedsRevision" %}
+                    <a href="/review/{{ session_id }}/guide/step/{{ step.number }}" class="btn btn-warning btn-xs">
+                        Revise &rarr;
+                    </a>
+                    {% elif step.status == "ReadyForReview" or step.status == "Reviewed" or not is_live %}
+                    <a href="/review/{{ session_id }}/guide/step/{{ step.number }}" class="btn btn-ghost btn-xs">
+                        {% if step.status == "Reviewed" %}
+                        View
+                        {% else %}
+                        Review
+                        {% endif %}
+                        &rarr;
+                    </a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>

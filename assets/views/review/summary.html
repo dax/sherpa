@@ -153,6 +153,12 @@
             View Review Steps
         </a>
     </div>
+    {% elif is_live and has_plan %}
+    <div class="mt-6">
+        <a href="/review/{{ session_id }}/guide" class="btn btn-primary w-full btn-lg">
+            Open Review Guide
+        </a>
+    </div>
     {% else %}
     <div id="start-review-area"
          hx-get="/review/{{ session_id }}/plan-status"
@@ -165,10 +171,13 @@
     </div>
     {% endif %}
 
+    {% if not is_live %}
     <div id="bg-status"
          hx-get="/review/{{ session_id }}/bg-hint"
          hx-trigger="load"
          hx-swap="outerHTML">
     </div>
+    {% endif %}
+
 </div>
 {% endblock %}

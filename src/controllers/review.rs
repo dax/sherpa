@@ -11,7 +11,9 @@ use crate::services::{
     background_analysis,
     config::SherpaConfig,
     git_analysis, markdown,
-    review_session::{fallback_review_plan, ChatMessage, ReviewPlan, ReviewSession, ReviewStep},
+    review_session::{
+        fallback_review_plan, ChatMessage, ReviewPlan, ReviewSession, ReviewStep, StepStatus,
+    },
 };
 
 fn load_ai_settings() -> Option<AiSettings> {
@@ -126,6 +128,26 @@ async fn summary_page(
         .map(|msg| chat_msg_to_json(msg, None))
         .collect();
 
+    let is_live = session.is_live();
+    let has_plan = session.review_plan.is_some();
+
+    let metrics = if is_live && !session.diff.is_empty() {
+        let (lines_added, lines_removed) = git_analysis::compute_diff_line_stats(&session.diff);
+        let files_changed = session
+            .diff
+            .lines()
+            .filter(|l| l.starts_with("diff --git"))
+            .count();
+        serde_json::json!({
+            "files_changed": files_changed,
+            "lines_added": lines_added,
+            "lines_removed": lines_removed,
+            "commits_on_branch": 0,
+        })
+    } else {
+        serde_json::json!(session.metrics)
+    };
+
     format::render().view(
         &v,
         "review/summary.html",
@@ -133,10 +155,12 @@ async fn summary_page(
             "session_id": session.id,
             "branch": session.branch,
             "default_branch": session.default_branch,
-            "metrics": session.metrics,
+            "metrics": metrics,
             "chat_messages": chat_messages_json,
             "all_validated": all_validated,
             "reviewed_steps": reviewed_steps,
+            "is_live": is_live,
+            "has_plan": has_plan,
         }),
     )
 }
@@ -157,6 +181,24 @@ async fn load_session_from_db(
         })?;
     let session = model.to_review_session();
     Ok((model, session))
+}
+
+fn synthesize_approach_from_plan(session: &ReviewSession) -> String {
+    let mut md = String::from("This is a **live review session** created by an AI coding agent. ");
+    md.push_str("The implementation is organized into the following steps:\n\n");
+
+    if let Some(ref plan) = session.review_plan {
+        for (i, step) in plan.steps.iter().enumerate() {
+            md.push_str(&format!(
+                "{}. **{}** — {}\n",
+                i + 1,
+                step.title,
+                step.rationale
+            ));
+        }
+    }
+
+    markdown::to_html(&md)
 }
 
 fn chat_msg_to_json(msg: &chat_messages::Model, current_step: Option<usize>) -> serde_json::Value {
@@ -251,6 +293,16 @@ async fn summary_approach(
     let section_id = "approach";
 
     let (model, session) = load_session_from_db(&ctx.db, &session_id).await?;
+
+    if session.is_live() {
+        let content = synthesize_approach_from_plan(&session);
+        return format::render().view(
+            &v,
+            "review/_section_content.html",
+            data!({"title": title, "content": content, "section_id": section_id}),
+        );
+    }
+
     let context = build_ai_context(&session);
     let primed = build_primed_session(&session);
 
@@ -506,6 +558,106 @@ async fn guide_plan_skip(
     format::render().redirect(&format!("/review/{session_id}/guide/step/1"))
 }
 
+fn build_steps_data_for_guide(
+    plan: &ReviewPlan,
+    session: &ReviewSession,
+) -> Vec<serde_json::Value> {
+    plan.steps
+        .iter()
+        .enumerate()
+        .map(|(i, step)| {
+            let validated = session.is_step_validated(i);
+            let status = if validated {
+                "Reviewed"
+            } else {
+                match step.status {
+                    StepStatus::Planned => "Planned",
+                    StepStatus::ReadyForReview => "ReadyForReview",
+                    StepStatus::Reviewed => "Reviewed",
+                    StepStatus::NeedsRevision => "NeedsRevision",
+                }
+            };
+            serde_json::json!({
+                "number": i + 1,
+                "title": step.title,
+                "file_count": step.file_refs.len(),
+                "status": status,
+                "is_new": step.status == StepStatus::ReadyForReview && !validated,
+            })
+        })
+        .collect()
+}
+
+#[debug_handler]
+async fn guide_page(
+    ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
+    Path(session_id): Path<String>,
+) -> Result<Response> {
+    let (_model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
+
+    let plan = match &session.review_plan {
+        Some(plan) => plan.clone(),
+        None => {
+            return format::render().redirect(&format!("/review/{session_id}/summary"));
+        }
+    };
+
+    session.ensure_validated_steps_size();
+    let is_live = session.is_live();
+    let total_steps = plan.steps.len();
+    let steps_ready = session.steps_ready_count();
+    let steps = build_steps_data_for_guide(&plan, &session);
+
+    format::render().view(
+        &v,
+        "review/guide.html",
+        data!({
+            "session_id": session.id,
+            "branch": session.branch,
+            "default_branch": session.default_branch,
+            "is_live": is_live,
+            "total_steps": total_steps,
+            "steps_ready": steps_ready,
+            "steps": steps,
+        }),
+    )
+}
+
+#[debug_handler]
+async fn guide_steps(
+    ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
+    Path(session_id): Path<String>,
+) -> Result<Response> {
+    let (_model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
+
+    let plan = match &session.review_plan {
+        Some(plan) => plan.clone(),
+        None => {
+            return Err(Error::NotFound);
+        }
+    };
+
+    session.ensure_validated_steps_size();
+    let is_live = session.is_live();
+    let total_steps = plan.steps.len();
+    let steps_ready = session.steps_ready_count();
+    let steps = build_steps_data_for_guide(&plan, &session);
+
+    format::render().view(
+        &v,
+        "review/_guide_steps.html",
+        data!({
+            "session_id": session.id,
+            "is_live": is_live,
+            "total_steps": total_steps,
+            "steps_ready": steps_ready,
+            "steps": steps,
+        }),
+    )
+}
+
 const LOADING_HINTS: &[&str] = &[
     "AI is reading through your changes...",
     "Analyzing code patterns and structure...",
@@ -523,6 +675,12 @@ async fn loading_page(
     Path(session_id): Path<String>,
 ) -> Result<Response> {
     let (model, session) = load_session_from_db(&ctx.db, &session_id).await?;
+
+    // Live sessions skip the loading page — plan is already available from session creation
+    if session.is_live() {
+        return format::render().redirect(&format!("/review/{session_id}/summary"));
+    }
+
     let status = background_analysis::check_analysis_status(&ctx.db, model.id, &session_id).await;
 
     if status.summary_ready {
@@ -557,7 +715,16 @@ async fn analysis_status(
     State(ctx): State<AppContext>,
     Path(session_id): Path<String>,
 ) -> Result<Response> {
-    let (model, _session) = load_session_from_db(&ctx.db, &session_id).await?;
+    let (model, session) = load_session_from_db(&ctx.db, &session_id).await?;
+
+    if session.is_live() {
+        return Ok(axum::response::Response::builder()
+            .header("HX-Redirect", format!("/review/{session_id}/summary"))
+            .body(axum::body::Body::empty())
+            .unwrap()
+            .into_response());
+    }
+
     let status = background_analysis::check_analysis_status(&ctx.db, model.id, &session_id).await;
 
     if status.summary_ready {
@@ -681,6 +848,7 @@ async fn step_page(
     session.ensure_validated_steps_size();
 
     let step = &plan.steps[step_number - 1];
+    let is_live = session.is_live();
     let step_files: Vec<String> = step.file_refs.iter().map(|f| f.path.clone()).collect();
 
     let step_validation = session
@@ -704,6 +872,17 @@ async fn step_page(
         })
         .collect();
 
+    let step_diff = if is_live {
+        step.step_diff.clone().unwrap_or_default()
+    } else {
+        let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
+            .file_refs
+            .iter()
+            .map(|f| (f.path.clone(), f.diff_lines))
+            .collect();
+        git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples)
+    };
+
     let validated_file_count = step_validation.validated_count();
     let total_file_count = step.file_refs.len();
 
@@ -713,12 +892,23 @@ async fn step_page(
         .enumerate()
         .map(|(i, s)| {
             let validated = session.is_step_validated(i);
+            let status = if validated {
+                "Reviewed"
+            } else {
+                match s.status {
+                    StepStatus::Planned => "Planned",
+                    StepStatus::ReadyForReview => "ReadyForReview",
+                    StepStatus::Reviewed => "Reviewed",
+                    StepStatus::NeedsRevision => "NeedsRevision",
+                }
+            };
             serde_json::json!({
                 "number": i + 1,
                 "title": s.title,
                 "file_count": s.file_refs.len(),
                 "active": i + 1 == step_number,
                 "validated": validated,
+                "status": status,
             })
         })
         .collect();
@@ -744,6 +934,13 @@ async fn step_page(
         .map(|msg| chat_msg_to_json(msg, Some(step_number)))
         .collect();
 
+    let step_status = match step.status {
+        StepStatus::Planned => "Planned",
+        StepStatus::ReadyForReview => "ReadyForReview",
+        StepStatus::Reviewed => "Reviewed",
+        StepStatus::NeedsRevision => "NeedsRevision",
+    };
+
     format::render().view(
         &v,
         "review/step.html",
@@ -764,6 +961,9 @@ async fn step_page(
             "current_step_validated": current_step_validated,
             "validated_file_count": validated_file_count,
             "total_file_count": total_file_count,
+            "is_live": is_live,
+            "step_diff": step_diff,
+            "step_status": step_status,
         }),
     )
 }
@@ -784,6 +984,7 @@ async fn step_explanation(
 
     let idx = step_number - 1;
     let step = &plan.steps[idx];
+    let is_live = session.is_live();
 
     let cached = ai_analyses::find_cached(
         &ctx.db,
@@ -806,6 +1007,22 @@ async fn step_explanation(
         );
     }
 
+    // In Live mode, if the agent hasn't provided an explanation and there's no
+    // cached one yet, show a "pending" message instead of trying to generate one
+    // from an empty diff. The background analysis spawned by complete_step will
+    // populate it eventually.
+    if is_live && step.step_diff.is_none() {
+        return format::render().view(
+            &v,
+            "review/_section_content.html",
+            data!({
+                "title": "Step Explanation",
+                "content": "<p class=\"text-base-content/50 italic\">Waiting for agent to push this step...</p>",
+                "section_id": "step-explanation",
+            }),
+        );
+    }
+
     let settings = match load_ai_settings() {
         Some(s) => s,
         None => {
@@ -824,12 +1041,16 @@ async fn step_explanation(
         }
     };
 
-    let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
-        .file_refs
-        .iter()
-        .map(|f| (f.path.clone(), f.diff_lines))
-        .collect();
-    let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
+    let step_diff = if is_live {
+        step.step_diff.clone().unwrap_or_default()
+    } else {
+        let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
+            .file_refs
+            .iter()
+            .map(|f| (f.path.clone(), f.diff_lines))
+            .collect();
+        git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples)
+    };
 
     let context = build_ai_context(&session);
     let instruction = ai_cli::step_explanation_instruction(&step.title, &step_diff);
@@ -949,12 +1170,17 @@ async fn step_relation(
     };
 
     let prev_title = &plan.steps[idx - 1].title;
-    let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
-        .file_refs
-        .iter()
-        .map(|f| (f.path.clone(), f.diff_lines))
-        .collect();
-    let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
+    let is_live = session.is_live();
+    let step_diff = if is_live {
+        step.step_diff.clone().unwrap_or_default()
+    } else {
+        let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
+            .file_refs
+            .iter()
+            .map(|f| (f.path.clone(), f.diff_lines))
+            .collect();
+        git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples)
+    };
 
     let context = build_ai_context(&session);
     let instruction = ai_cli::step_relation_instruction(prev_title, &step.title, &step_diff);
@@ -1049,12 +1275,17 @@ async fn step_chat(
     })?
     .unwrap_or_default();
 
-    let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
-        .file_refs
-        .iter()
-        .map(|f| (f.path.clone(), f.diff_lines))
-        .collect();
-    let step_diff = git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples);
+    let is_live = session.is_live();
+    let step_diff = if is_live {
+        step.step_diff.clone().unwrap_or_default()
+    } else {
+        let file_refs_tuples: Vec<(String, Option<(usize, usize)>)> = step
+            .file_refs
+            .iter()
+            .map(|f| (f.path.clone(), f.diff_lines))
+            .collect();
+        git_analysis::extract_diff_for_files(&session.diff, &file_refs_tuples)
+    };
 
     let user_msg_model = chat_messages::create(
         &ctx.db,
@@ -1139,6 +1370,52 @@ async fn step_chat(
 #[derive(Deserialize)]
 pub struct ValidateFileForm {
     file_path: String,
+}
+
+#[derive(Deserialize)]
+pub struct RevisionForm {
+    block: Option<String>,
+}
+
+#[debug_handler]
+async fn step_request_revision(
+    State(ctx): State<AppContext>,
+    Path((session_id, step_number)): Path<(String, usize)>,
+    Form(form): Form<RevisionForm>,
+) -> Result<Response> {
+    let (_model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
+
+    let plan = session.review_plan.as_mut().ok_or(Error::NotFound)?;
+    let total_steps = plan.steps.len();
+    if step_number < 1 || step_number > total_steps {
+        return Err(Error::NotFound);
+    }
+
+    let idx = step_number - 1;
+    let step = &plan.steps[idx];
+    if step.status != StepStatus::ReadyForReview && step.status != StepStatus::Reviewed {
+        return Err(Error::BadRequest(format!(
+            "Step {step_number} cannot be revised (current status: {:?})",
+            step.status
+        )));
+    }
+
+    plan.steps[idx].status = StepStatus::NeedsRevision;
+    if form.block.is_some() {
+        session.block_agent = Some(true);
+    }
+
+    let plan_json = serde_json::to_string(&session.review_plan).ok();
+    review_sessions::update_review_plan(&ctx.db, &session_id, plan_json)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error saving revision request: {e}");
+            Error::InternalServerError
+        })?;
+
+    let _ = session.save();
+
+    format::render().redirect(&format!("/review/{session_id}/guide/step/{step_number}"))
 }
 
 #[debug_handler]
@@ -1306,6 +1583,8 @@ pub fn page_routes() -> Routes {
         .add("/{session_id}/summary/skip/{section}", get(section_skip))
         .add("/{session_id}/summary/chat", post(summary_chat))
         .add("/{session_id}/guide/start", post(guide_start))
+        .add("/{session_id}/guide", get(guide_page))
+        .add("/{session_id}/guide/steps", get(guide_steps))
         .add("/{session_id}/guide/plan/skip", post(guide_plan_skip))
         .add("/{session_id}/guide/step/{step_number}", get(step_page))
         .add(
@@ -1327,6 +1606,10 @@ pub fn page_routes() -> Routes {
         .add(
             "/{session_id}/guide/step/{step_number}/validate-file",
             post(step_validate_file),
+        )
+        .add(
+            "/{session_id}/guide/step/{step_number}/request-revision",
+            post(step_request_revision),
         )
         .add(
             "/{session_id}/guide/step/{step_number}/skip/{section}",

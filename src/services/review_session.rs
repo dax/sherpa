@@ -8,6 +8,31 @@ use serde::{Deserialize, Serialize};
 
 use super::git_analysis::{self, ChangedFile, GitAnalysis};
 
+/// Whether the review is happening after all changes are done (PostHoc)
+/// or while the developer is still building (Live).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ReviewMode {
+    /// Traditional mode: all changes exist upfront, reviewer sees everything at once.
+    #[default]
+    PostHoc,
+    /// Live mode: an agent pushes steps incrementally as the developer codes.
+    Live,
+}
+
+/// Status of an individual review step in Live mode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum StepStatus {
+    /// Step is in the plan but the agent hasn't pushed its diff yet.
+    #[default]
+    Planned,
+    /// The agent has pushed the diff — ready for the reviewer to look at.
+    ReadyForReview,
+    /// The reviewer has validated this step.
+    Reviewed,
+    /// The reviewer has requested revisions on this step.
+    NeedsRevision,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SummaryData {
     pub overview: Option<String>,
@@ -39,6 +64,10 @@ pub struct ReviewStep {
     pub file_refs: Vec<FileRef>,
     #[serde(default)]
     pub ai_data: StepAiData,
+    #[serde(default)]
+    pub status: StepStatus,
+    #[serde(default)]
+    pub step_diff: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -154,6 +183,12 @@ pub struct ReviewSession {
     pub validated_steps: Vec<StepValidation>,
     #[serde(default)]
     pub primed_session_id: Option<String>,
+    #[serde(default)]
+    pub review_mode: ReviewMode,
+    #[serde(default)]
+    pub agent_token: Option<String>,
+    #[serde(default)]
+    pub block_agent: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -210,6 +245,59 @@ impl ReviewSession {
             review_plan: None,
             validated_steps: Vec::new(),
             primed_session_id: None,
+            review_mode: ReviewMode::PostHoc,
+            agent_token: None,
+            block_agent: None,
+        }
+    }
+
+    pub fn new_live(
+        repo_path: String,
+        branch: String,
+        plan: ReviewPlan,
+        agent_token: String,
+    ) -> Self {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before UNIX epoch")
+            .as_millis();
+        let id = format!("review-{millis}");
+
+        let created_at = {
+            let secs = millis / 1000;
+            let remaining_millis = millis % 1000;
+            let days_since_epoch = secs / 86400;
+            let time_of_day = secs % 86400;
+            let hours = time_of_day / 3600;
+            let minutes = (time_of_day % 3600) / 60;
+            let seconds = time_of_day % 60;
+
+            let (year, month, day) = days_to_ymd(days_since_epoch as i64);
+            format!(
+                "{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}.{remaining_millis:03}Z"
+            )
+        };
+
+        let validated_steps = vec![StepValidation::default(); plan.steps.len()];
+
+        Self {
+            id,
+            repo_path,
+            branch,
+            default_branch: String::new(),
+            merge_base: String::new(),
+            diff: String::new(),
+            changed_files: Vec::new(),
+            created_at,
+            summary: SummaryData::default(),
+            chat_messages: Vec::new(),
+            metrics: DiffMetrics::default(),
+            review_plan: Some(plan),
+            validated_steps,
+            primed_session_id: None,
+            review_mode: ReviewMode::Live,
+            agent_token: Some(agent_token),
+            block_agent: None,
         }
     }
 
@@ -332,6 +420,22 @@ impl ReviewSession {
             .find(|&i| !self.is_step_validated(i))
             .map(|i| i + 1)
     }
+
+    pub fn steps_ready_count(&self) -> usize {
+        self.review_plan
+            .as_ref()
+            .map(|plan| {
+                plan.steps
+                    .iter()
+                    .filter(|s| s.status != StepStatus::Planned)
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    pub fn is_live(&self) -> bool {
+        self.review_mode == ReviewMode::Live
+    }
 }
 
 pub fn fallback_review_plan(session: &ReviewSession) -> ReviewPlan {
@@ -346,6 +450,8 @@ pub fn fallback_review_plan(session: &ReviewSession) -> ReviewPlan {
                 diff_lines: None,
             }],
             ai_data: StepAiData::default(),
+            status: StepStatus::ReadyForReview,
+            step_diff: None,
         })
         .collect();
 
@@ -547,6 +653,8 @@ mod tests {
                     },
                 ],
                 ai_data: StepAiData::default(),
+                status: StepStatus::default(),
+                step_diff: None,
             }],
             generated_at: "12:00:00".to_string(),
         };
@@ -577,6 +685,8 @@ mod tests {
                     diff_lines: None,
                 }],
                 ai_data: StepAiData::default(),
+                status: StepStatus::default(),
+                step_diff: None,
             }],
             generated_at: "10:00:00".to_string(),
         });
@@ -677,6 +787,55 @@ mod tests {
     }
 
     #[test]
+    fn test_new_live_creates_live_session() {
+        let plan = ReviewPlan {
+            steps: vec![
+                ReviewStep {
+                    title: "Step 1".to_string(),
+                    rationale: "First change".to_string(),
+                    file_refs: vec![FileRef {
+                        path: "src/lib.rs".to_string(),
+                        diff_lines: None,
+                    }],
+                    ai_data: StepAiData::default(),
+                    status: StepStatus::Planned,
+                    step_diff: None,
+                },
+                ReviewStep {
+                    title: "Step 2".to_string(),
+                    rationale: "Second change".to_string(),
+                    file_refs: vec![],
+                    ai_data: StepAiData::default(),
+                    status: StepStatus::Planned,
+                    step_diff: None,
+                },
+            ],
+            generated_at: "now".to_string(),
+        };
+
+        let session = ReviewSession::new_live(
+            "/tmp/test-repo".to_string(),
+            "feature-branch".to_string(),
+            plan,
+            "test-token-123".to_string(),
+        );
+
+        assert!(session.id.starts_with("review-"));
+        assert_eq!(session.repo_path, "/tmp/test-repo");
+        assert_eq!(session.branch, "feature-branch");
+        assert_eq!(session.review_mode, ReviewMode::Live);
+        assert_eq!(session.agent_token, Some("test-token-123".to_string()));
+        assert!(session.review_plan.is_some());
+        assert_eq!(session.review_plan.as_ref().unwrap().steps.len(), 2);
+        assert_eq!(session.validated_steps.len(), 2);
+        assert!(!session.is_step_validated(0));
+        // Step 2 has no file_refs, so it's trivially validated
+        assert!(session.is_step_validated(1));
+        assert!(session.diff.is_empty());
+        assert!(session.is_live());
+    }
+
+    #[test]
     fn test_first_unvalidated_step_no_plan() {
         let session = ReviewSession::new(make_test_analysis());
         assert_eq!(session.first_unvalidated_step(), None);
@@ -695,6 +854,8 @@ mod tests {
                         diff_lines: None,
                     }],
                     ai_data: StepAiData::default(),
+                    status: StepStatus::default(),
+                    step_diff: None,
                 },
                 ReviewStep {
                     title: "Step 2".to_string(),
@@ -704,6 +865,8 @@ mod tests {
                         diff_lines: None,
                     }],
                     ai_data: StepAiData::default(),
+                    status: StepStatus::default(),
+                    step_diff: None,
                 },
             ],
             generated_at: "now".to_string(),
@@ -726,6 +889,8 @@ mod tests {
                         diff_lines: None,
                     }],
                     ai_data: StepAiData::default(),
+                    status: StepStatus::default(),
+                    step_diff: None,
                 },
                 ReviewStep {
                     title: "Step 2".to_string(),
@@ -735,6 +900,8 @@ mod tests {
                         diff_lines: None,
                     }],
                     ai_data: StepAiData::default(),
+                    status: StepStatus::default(),
+                    step_diff: None,
                 },
             ],
             generated_at: "now".to_string(),
@@ -758,6 +925,8 @@ mod tests {
                     diff_lines: None,
                 }],
                 ai_data: StepAiData::default(),
+                status: StepStatus::default(),
+                step_diff: None,
             }],
             generated_at: "now".to_string(),
         });
@@ -804,5 +973,56 @@ mod tests {
             .files
             .contains_key("__legacy_validated__"));
         assert!(session.validated_steps[1].files.is_empty());
+    }
+
+    #[test]
+    fn test_needs_revision_serialization_roundtrip() {
+        let step = ReviewStep {
+            title: "Revise this".to_string(),
+            rationale: "Needs work".to_string(),
+            file_refs: vec![FileRef {
+                path: "src/lib.rs".to_string(),
+                diff_lines: None,
+            }],
+            ai_data: StepAiData::default(),
+            status: StepStatus::NeedsRevision,
+            step_diff: Some("diff content".to_string()),
+        };
+
+        let json = serde_json::to_string(&step).unwrap();
+        assert!(json.contains("NeedsRevision"));
+
+        let deserialized: ReviewStep = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.status, StepStatus::NeedsRevision);
+        assert_eq!(deserialized.title, "Revise this");
+    }
+
+    #[test]
+    fn test_block_agent_serialization_roundtrip() {
+        let mut session = ReviewSession::new(make_test_analysis());
+        assert_eq!(session.block_agent, None);
+
+        session.block_agent = Some(true);
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"block_agent\":true"));
+
+        let loaded: ReviewSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.block_agent, Some(true));
+    }
+
+    #[test]
+    fn test_block_agent_defaults_to_none() {
+        let json = r#"{
+            "id": "review-123",
+            "repo_path": "/tmp/test",
+            "branch": "main",
+            "default_branch": "main",
+            "merge_base": "abc",
+            "diff": "",
+            "changed_files": [],
+            "created_at": "2025-01-01T00:00:00.000Z"
+        }"#;
+        let session: ReviewSession = serde_json::from_str(json).unwrap();
+        assert_eq!(session.block_agent, None);
     }
 }

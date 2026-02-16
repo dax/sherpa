@@ -10,6 +10,13 @@ use super::cli_detection::AiCli;
 pub struct SherpaConfig {
     #[serde(default)]
     pub ai: AiConfig,
+    #[serde(default)]
+    pub agent: AgentConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentConfig {
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

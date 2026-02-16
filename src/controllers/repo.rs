@@ -19,8 +19,67 @@ pub struct FreshForm {
 }
 
 #[debug_handler]
-async fn analyze_page(ViewEngine(v): ViewEngine<TeraView>) -> Result<Response> {
-    format::render().view(&v, "repo/analyze.html", data!({}))
+async fn analyze_page(
+    ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
+) -> Result<Response> {
+    let models = rs_model::Model::find_all_ordered(&ctx.db)
+        .await
+        .unwrap_or_default();
+
+    let sessions: Vec<serde_json::Value> = models
+        .iter()
+        .map(|m| {
+            let session = m.to_review_session();
+            let total_steps = session
+                .review_plan
+                .as_ref()
+                .map(|p| p.steps.len())
+                .unwrap_or(0);
+            let validated_count = (0..total_steps)
+                .filter(|&i| session.is_step_validated(i))
+                .count();
+            let is_completed = total_steps > 0 && validated_count == total_steps;
+            let is_live = matches!(
+                session.review_mode,
+                crate::services::review_session::ReviewMode::Live
+            );
+
+            let repo_name = std::path::Path::new(&session.repo_path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| session.repo_path.clone());
+
+            serde_json::json!({
+                "session_id": session.id,
+                "repo_path": session.repo_path,
+                "repo_name": repo_name,
+                "branch": session.branch,
+                "is_live": is_live,
+                "total_steps": total_steps,
+                "validated_count": validated_count,
+                "is_completed": is_completed,
+                "updated_at": m.updated_at.format("%Y-%m-%d %H:%M").to_string(),
+            })
+        })
+        .collect();
+
+    let has_active = sessions
+        .iter()
+        .any(|s| !s["is_completed"].as_bool().unwrap_or(true));
+    let has_completed = sessions
+        .iter()
+        .any(|s| s["is_completed"].as_bool().unwrap_or(false));
+
+    format::render().view(
+        &v,
+        "repo/analyze.html",
+        data!({
+            "sessions": sessions,
+            "has_active": has_active,
+            "has_completed": has_completed,
+        }),
+    )
 }
 
 #[debug_handler]

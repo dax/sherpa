@@ -1,4 +1,4 @@
-use sea_orm::{entity::prelude::*, ActiveValue::Set};
+use sea_orm::{entity::prelude::*, ActiveValue::Set, QueryOrder};
 
 use super::_entities::review_sessions::Column;
 pub use super::_entities::review_sessions::{ActiveModel, Entity, Model};
@@ -11,6 +11,13 @@ impl Model {
         Entity::find()
             .filter(Column::SessionKey.eq(key))
             .one(db)
+            .await
+    }
+
+    pub async fn find_all_ordered(db: &DatabaseConnection) -> Result<Vec<Self>, DbErr> {
+        Entity::find()
+            .order_by_desc(Column::UpdatedAt)
+            .all(db)
             .await
     }
 
@@ -43,6 +50,10 @@ impl Model {
 impl ActiveModel {
     pub fn from_review_session(session: &crate::services::review_session::ReviewSession) -> Self {
         let now = chrono::Utc::now().naive_utc();
+        let mode_str = match session.review_mode {
+            crate::services::review_session::ReviewMode::PostHoc => "PostHoc",
+            crate::services::review_session::ReviewMode::Live => "Live",
+        };
         Self {
             id: sea_orm::ActiveValue::NotSet,
             session_key: Set(session.id.clone()),
@@ -61,6 +72,8 @@ impl ActiveModel {
                 serde_json::to_string(&session.validated_steps).unwrap_or_else(|_| "[]".into())
             ),
             primed_session_id: Set(session.primed_session_id.clone()),
+            review_mode: Set(mode_str.to_string()),
+            agent_token: Set(session.agent_token.clone()),
             created_at: Set(now),
             updated_at: Set(now),
         }
@@ -79,10 +92,6 @@ impl Model {
             .as_ref()
             .and_then(|p| serde_json::from_str(p).ok());
 
-        // Backward-compat: deserialize handles both Vec<bool> and
-        // Vec<StepValidation> via the custom deserializer on the
-        // ReviewSession struct.  We build a minimal JSON wrapper so
-        // serde triggers the right path.
         let validated_steps: Vec<StepValidation> = {
             let raw = &self.validated_steps;
             #[derive(serde::Deserialize)]
@@ -96,6 +105,10 @@ impl Model {
             serde_json::from_str::<Wrapper>(&json)
                 .map(|w| w.validated_steps)
                 .unwrap_or_default()
+        };
+        let review_mode = match self.review_mode.as_str() {
+            "Live" => ReviewMode::Live,
+            _ => ReviewMode::PostHoc,
         };
 
         ReviewSession {
@@ -113,6 +126,9 @@ impl Model {
             review_plan,
             validated_steps,
             primed_session_id: self.primed_session_id.clone(),
+            review_mode,
+            agent_token: self.agent_token.clone(),
+            block_agent: None,
         }
     }
 }
@@ -155,6 +171,22 @@ pub async fn update_primed_session(
     let now = chrono::Utc::now().naive_utc();
     let mut active: ActiveModel = model.into();
     active.primed_session_id = Set(Some(primed_session_id.to_string()));
+    active.updated_at = Set(now);
+    active.update(db).await?;
+    Ok(())
+}
+
+pub async fn update_diff(
+    db: &DatabaseConnection,
+    session_key: &str,
+    diff: &str,
+) -> Result<(), DbErr> {
+    let model = Model::find_by_session_key(db, session_key)
+        .await?
+        .ok_or(DbErr::RecordNotFound("session not found".into()))?;
+    let now = chrono::Utc::now().naive_utc();
+    let mut active: ActiveModel = model.into();
+    active.diff = Set(diff.to_string());
     active.updated_at = Set(now);
     active.update(db).await?;
     Ok(())

@@ -11,11 +11,24 @@
                 {{ branch }} &rarr; {{ default_branch }}
             </p>
             <p class="text-xs text-base-content/50 mt-1">{{ total_steps }} steps</p>
+            {% if is_live %}
+            <a href="/review/{{ session_id }}/guide" class="btn btn-ghost btn-xs mt-2 w-full">
+                View Guide
+            </a>
+            {% endif %}
         </div>
 
         <ul class="steps steps-vertical w-full">
             {% for step in steps %}
-            <li class="step {% if step.active %}step-primary{% elif step.validated %}step-success{% endif %}">
+            <li class="step {% if step.active %}step-primary{% elif step.validated %}step-success{% elif is_live and step.status == 'ReadyForReview' %}step-accent{% endif %}">
+                {% if is_live and step.status == "Planned" %}
+                <div class="w-full">
+                    <div class="text-left w-full py-2">
+                        <div class="font-medium text-sm text-base-content/40">{{ step.title }}</div>
+                        <div class="text-xs text-base-content/30 italic">Waiting for agent...</div>
+                    </div>
+                </div>
+                {% else %}
                 <a href="/review/{{ session_id }}/guide/step/{{ step.number }}" class="w-full">
                     <div class="text-left w-full py-2">
                         <div class="font-medium text-sm flex items-center gap-1">
@@ -31,6 +44,7 @@
                         </div>
                     </div>
                 </a>
+                {% endif %}
             </li>
             {% endfor %}
         </ul>
@@ -165,6 +179,20 @@
                         </svg>
                         All files validated
                     </span>
+                    {% endif %}
+
+                    {% if is_live and step_status != "NeedsRevision" and step_status == "ReadyForReview" %}
+                    <form method="post" action="/review/{{ session_id }}/guide/step/{{ step_number }}/request-revision" class="flex items-center gap-2">
+                        <label class="label cursor-pointer gap-1 text-xs">
+                            <input type="checkbox" name="block" value="true" class="checkbox checkbox-warning checkbox-xs" />
+                            <span>Block agent</span>
+                        </label>
+                        <button type="submit" class="btn btn-warning btn-sm">Request Revision</button>
+                    </form>
+                    {% endif %}
+
+                    {% if step_status == "NeedsRevision" %}
+                    <span class="badge badge-warning badge-lg gap-1 self-center">Needs Revision</span>
                     {% endif %}
 
                     {% if step_number < total_steps %}

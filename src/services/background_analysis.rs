@@ -627,6 +627,147 @@ fn spawn_step_explanations(
     }
 }
 
+/// Spawn background tasks for a step that was completed by an agent in live mode.
+/// The agent pushes the diff directly, so we don't extract from session.diff.
+/// This spawns step_explanation (if not already cached) and step_relation (for step >= 2).
+pub fn spawn_live_step_analyses(
+    db: DatabaseConnection,
+    session_db_id: i32,
+    session: ReviewSession,
+    step_number: usize,
+    step_diff: String,
+) {
+    let step_idx = step_number - 1;
+    let plan = match session.review_plan.as_ref() {
+        Some(p) => p.clone(),
+        None => return,
+    };
+    let step = match plan.steps.get(step_idx) {
+        Some(s) => s.clone(),
+        None => return,
+    };
+
+    {
+        let db = db.clone();
+        let session = session.clone();
+        let step_title = step.title.clone();
+        let diff = step_diff.clone();
+        tokio::spawn(async move {
+            let sn = step_number as i32;
+            if let Ok(Some(_)) =
+                ai_analyses::find_cached(&db, session_db_id, "step_explanation", Some(sn)).await
+            {
+                tracing::info!("Live step_explanation {sn}: already cached");
+                return;
+            }
+
+            let settings = match load_ai_settings() {
+                Some(s) => s,
+                None => {
+                    tracing::warn!("Live step_explanation {sn}: no AI backend configured");
+                    return;
+                }
+            };
+
+            let instruction = ai_cli::step_explanation_instruction(&step_title, &diff);
+            let context = build_ai_context(&session);
+            let prompt = AiPrompt {
+                context,
+                instruction,
+            };
+
+            let model = settings.model_for_tier(ModelTier::Fast);
+            match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout, model)
+                .await
+            {
+                Ok(content) => {
+                    if let Err(e) = ai_analyses::upsert(
+                        &db,
+                        session_db_id,
+                        "step_explanation",
+                        Some(sn),
+                        &content,
+                    )
+                    .await
+                    {
+                        tracing::error!("Live step_explanation {sn}: DB error: {e}");
+                    } else {
+                        tracing::info!("Live step_explanation {sn}: completed");
+                    }
+                }
+                Err(e) => {
+                    log_ai_error(&e);
+                    let _ = ai_analyses::record_failure(
+                        &db,
+                        session_db_id,
+                        "step_explanation",
+                        Some(sn),
+                        &e.to_string(),
+                    )
+                    .await;
+                }
+            }
+        });
+    }
+
+    if step_number >= 2 {
+        let prev_title = plan.steps[step_idx - 1].title.clone();
+        let current_title = step.title.clone();
+        let diff = step_diff;
+        tokio::spawn(async move {
+            let sn = step_number as i32;
+            if let Ok(Some(_)) =
+                ai_analyses::find_cached(&db, session_db_id, "step_relation", Some(sn)).await
+            {
+                tracing::info!("Live step_relation {sn}: already cached");
+                return;
+            }
+
+            let settings = match load_ai_settings() {
+                Some(s) => s,
+                None => {
+                    tracing::warn!("Live step_relation {sn}: no AI backend configured");
+                    return;
+                }
+            };
+
+            let instruction = ai_cli::step_relation_instruction(&prev_title, &current_title, &diff);
+            let context = build_ai_context(&session);
+            let prompt = AiPrompt {
+                context,
+                instruction,
+            };
+
+            let model = settings.model_for_tier(ModelTier::Fast);
+            match ai_cli::generate_with_timeout(settings.cli, &prompt, settings.timeout, model)
+                .await
+            {
+                Ok(content) => {
+                    if let Err(e) =
+                        ai_analyses::upsert(&db, session_db_id, "step_relation", Some(sn), &content)
+                            .await
+                    {
+                        tracing::error!("Live step_relation {sn}: DB error: {e}");
+                    } else {
+                        tracing::info!("Live step_relation {sn}: completed");
+                    }
+                }
+                Err(e) => {
+                    log_ai_error(&e);
+                    let _ = ai_analyses::record_failure(
+                        &db,
+                        session_db_id,
+                        "step_relation",
+                        Some(sn),
+                        &e.to_string(),
+                    )
+                    .await;
+                }
+            }
+        });
+    }
+}
+
 pub async fn check_analysis_status(
     db: &DatabaseConnection,
     session_db_id: i32,

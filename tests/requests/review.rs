@@ -7,7 +7,8 @@ use sherpa::models::chat_messages as cm_model;
 use sherpa::models::review_sessions as rs_model;
 use sherpa::services::git_analysis::{ChangedFile, FileStatus, GitAnalysis};
 use sherpa::services::review_session::{
-    repo_session_path, FileRef, ReviewPlan, ReviewSession, ReviewStep, StepAiData, StepValidation,
+    repo_session_path, FileRef, ReviewPlan, ReviewSession, ReviewStep, StepAiData, StepStatus,
+    StepValidation,
 };
 
 fn make_test_session() -> ReviewSession {
@@ -174,6 +175,8 @@ fn make_session_with_plan() -> ReviewSession {
                     diff_lines: None,
                 }],
                 ai_data: StepAiData::default(),
+                status: StepStatus::default(),
+                step_diff: None,
             },
             ReviewStep {
                 title: "New feature code".to_string(),
@@ -183,6 +186,8 @@ fn make_session_with_plan() -> ReviewSession {
                     diff_lines: Some((1, 10)),
                 }],
                 ai_data: StepAiData::default(),
+                status: StepStatus::default(),
+                step_diff: None,
             },
         ],
         generated_at: "12:00:00".to_string(),

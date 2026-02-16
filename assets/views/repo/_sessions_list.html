@@ -1,0 +1,84 @@
+{% if sessions | length > 0 %}
+<div class="w-full max-w-lg mt-8">
+    <h2 class="text-lg font-semibold mb-3">Existing Reviews</h2>
+
+    {% if has_active %}
+    <div class="space-y-2">
+        {% for s in sessions %}
+        {% if not s.is_completed %}
+        <a href="/review/{{ s.session_id }}/summary"
+           class="card bg-base-100 shadow-sm hover:shadow-md transition-shadow block">
+            <div class="card-body p-4">
+                <div class="flex items-center gap-3">
+                    {% if s.is_live %}
+                    <span class="badge badge-primary badge-sm">Live</span>
+                    {% else %}
+                    <span class="badge badge-ghost badge-sm">Post-hoc</span>
+                    {% endif %}
+
+                    <div class="flex-1 min-w-0">
+                        <span class="font-medium truncate block">{{ s.repo_name }}</span>
+                        <span class="text-xs text-base-content/50 font-mono truncate block">{{ s.branch }}</span>
+                    </div>
+
+                    {% if s.total_steps > 0 %}
+                    <div class="flex items-center gap-2">
+                        <div class="w-16 bg-base-300 rounded-full h-1.5">
+                            <div class="bg-primary rounded-full h-1.5 transition-all"
+                                 style="width: {{ s.validated_count * 100 / s.total_steps }}%"></div>
+                        </div>
+                        <span class="text-xs text-base-content/50 whitespace-nowrap">{{ s.validated_count }}/{{ s.total_steps }}</span>
+                    </div>
+                    {% else %}
+                    <span class="text-xs text-base-content/40 italic">No plan yet</span>
+                    {% endif %}
+
+                    <span class="text-xs text-base-content/40">{{ s.updated_at }}</span>
+                </div>
+            </div>
+        </a>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if has_completed %}
+    <div class="mt-4">
+        <button class="btn btn-ghost btn-xs gap-1 text-base-content/50"
+                onclick="document.getElementById('completed-reviews').classList.toggle('hidden'); this.querySelector('svg').classList.toggle('rotate-180')">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 transition-transform" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+            </svg>
+            Completed reviews
+        </button>
+        <div id="completed-reviews" class="hidden space-y-2 mt-2">
+            {% for s in sessions %}
+            {% if s.is_completed %}
+            <a href="/review/{{ s.session_id }}/summary"
+               class="card bg-base-100 shadow-sm opacity-60 hover:opacity-100 hover:shadow-md transition-all block">
+                <div class="card-body p-4">
+                    <div class="flex items-center gap-3">
+                        <span class="badge badge-success badge-sm gap-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                            </svg>
+                            Done
+                        </span>
+
+                        <div class="flex-1 min-w-0">
+                            <span class="font-medium truncate block">{{ s.repo_name }}</span>
+                            <span class="text-xs text-base-content/50 font-mono truncate block">{{ s.branch }}</span>
+                        </div>
+
+                        <span class="text-xs text-base-content/50">{{ s.total_steps }} steps</span>
+                        <span class="text-xs text-base-content/40">{{ s.updated_at }}</span>
+                    </div>
+                </div>
+            </a>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}

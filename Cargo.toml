@@ -40,10 +40,18 @@ toml = { version = "0.8" }
 which = { version = "7" }
 dirs = { version = "6" }
 pulldown-cmark = { version = "0.13" }
+rmcp = { version = "0.15", features = ["server", "macros", "transport-io"] }
+schemars = { version = "1.0" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [[bin]]
 name = "sherpa-cli"
 path = "src/bin/main.rs"
+required-features = []
+
+[[bin]]
+name = "sherpa-mcp"
+path = "src/bin/mcp.rs"
 required-features = []
 
 [dev-dependencies]

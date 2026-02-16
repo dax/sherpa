@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Sherpa — Review Guide{% endblock %}
+
+{% block content %}
+<div class="container mx-auto max-w-4xl p-6">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">Review Guide</h1>
+            <p class="text-base-content/70 mt-1">
+                Branch <span class="font-mono font-semibold">{{ branch }}</span>
+                against <span class="font-mono font-semibold">{{ default_branch }}</span>
+            </p>
+        </div>
+        <a href="/review/{{ session_id }}/summary" class="btn btn-ghost btn-sm">Back to Summary</a>
+    </div>
+
+    {% if is_live %}
+    <div class="flex items-center gap-3 mb-4">
+        <span class="badge badge-info badge-lg gap-1">
+            <span class="relative flex h-2 w-2">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-info opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-2 w-2 bg-info"></span>
+            </span>
+            Live Review
+        </span>
+        <span class="text-sm text-base-content/60">
+            {{ steps_ready }} of {{ total_steps }} steps ready for review
+        </span>
+    </div>
+    {% endif %}
+
+    <div id="guide-steps-list"
+         {% if is_live %}
+         hx-get="/review/{{ session_id }}/guide/steps"
+         hx-trigger="every 2s"
+         hx-swap="outerHTML"
+         {% endif %}>
+        {% include "review/_guide_steps.html" %}
+    </div>
+</div>
+{% endblock %}

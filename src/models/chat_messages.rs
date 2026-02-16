@@ -14,6 +14,19 @@ pub async fn find_by_session(
         .await
 }
 
+pub async fn find_by_session_since(
+    db: &DatabaseConnection,
+    session_db_id: i32,
+    since: DateTime,
+) -> Result<Vec<Model>, DbErr> {
+    Entity::find()
+        .filter(Column::SessionId.eq(session_db_id))
+        .filter(Column::CreatedAt.gt(since))
+        .order_by_asc(Column::CreatedAt)
+        .all(db)
+        .await
+}
+
 pub async fn find_by_session_and_step(
     db: &DatabaseConnection,
     session_db_id: i32,

@@ -23,6 +23,8 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub validated_steps: String,
     pub primed_session_id: Option<String>,
+    pub review_mode: String,
+    pub agent_token: Option<String>,
     pub created_at: DateTime,
     pub updated_at: DateTime,
 }
