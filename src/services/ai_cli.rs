@@ -137,9 +137,10 @@ pub fn build_context(
 pub fn approach_instruction() -> &'static str {
     "Describe the implementation approach as a structured summary.\n\n\
      Use this format:\n\
-     1. **Architecture**: One sentence on the overall design approach\n\
-     2. **Key decisions**: 2-4 numbered points on notable patterns, trade-offs, or choices\n\
-     3. **Potential concerns**: 1-2 bullet points (or \"None identified\" if clean)\n\n\
+     1. **What**: 1-2 sentences on what this branch implements overall\n\
+     2. **How**: 1-2 sentences on the architecture/design approach — patterns, layers, key decisions\n\
+     3. **Key details**: 2-4 bullet points on notable trade-offs, patterns used, or choices made\n\
+     4. **Concerns**: 1-2 bullet points on potential issues (or \"None identified\" if clean)\n\n\
      Rules:\n\
      - Be specific: reference actual file names, patterns, and types\n\
      - Keep each point to 1-2 sentences maximum\n\
