@@ -43,3 +43,4 @@ assets/static/js/
 # Screenshots (from Playwright/agent testing)
 *.png
 !assets/static/image.png
+.playwright-cli

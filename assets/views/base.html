@@ -48,8 +48,41 @@
             if (labels[text]) {
                 el.dataset.enhanced = 'true';
                 el.textContent = labels[text] + ' ' + el.textContent;
-                el.closest('p, li').classList.add('analysis-label-block');
+                var block = el.closest('p, li');
+                var next = block.nextElementSibling;
+                if (next && /^[UO]L$/i.test(next.tagName)) {
+                    var wrapper = document.createElement('div');
+                    wrapper.classList.add('analysis-label-block');
+                    block.replaceWith(wrapper);
+                    wrapper.appendChild(block);
+                    wrapper.appendChild(next);
+                    block.classList.remove('analysis-label-block');
+                } else {
+                    block.classList.add('analysis-label-block');
+                }
             }
+        });
+        document.querySelectorAll('.prose h2, .prose h3').forEach(function(heading) {
+            if (heading.dataset.enhanced) return;
+            var raw = heading.textContent.trim().replace(/:$/, '').replace(/^\d+\.\s*/, '');
+            var icon = labels[raw];
+            if (!icon) return;
+            heading.dataset.enhanced = 'true';
+            var content = [];
+            var sibling = heading.nextElementSibling;
+            while (sibling && !/^H[1-3]$/i.test(sibling.tagName)) {
+                content.push(sibling);
+                sibling = sibling.nextElementSibling;
+            }
+            var wrapper = document.createElement('div');
+            wrapper.classList.add('analysis-label-block');
+            var firstIsP = content.length && content[0].tagName === 'P';
+            var label = document.createElement('p');
+            label.innerHTML = '<strong>' + icon + ' ' + raw + '</strong>' + (firstIsP ? ': ' + content[0].innerHTML : '');
+            wrapper.appendChild(label);
+            if (firstIsP) content[0].remove();
+            for (var i = firstIsP ? 1 : 0; i < content.length; i++) wrapper.appendChild(content[i]);
+            heading.replaceWith(wrapper);
         });
     }
     enhanceAnalysisBlocks();

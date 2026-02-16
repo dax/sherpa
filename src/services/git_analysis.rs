@@ -186,6 +186,23 @@ pub fn extract_diff_for_files(
                         }
                         result.push_str(&lines[start_idx..end_idx].join("\n"));
                         result.push('\n');
+                    } else {
+                        // diff_lines out of range (e.g. AI used source file line
+                        // numbers instead of diff-section-internal lines) — fall
+                        // back to the entire file section rather than returning
+                        // an empty diff.
+                        tracing::warn!(
+                            "diff_lines [{start}, {end}] out of range for \
+                             {path} (section has {} lines) — using full section",
+                            lines.len()
+                        );
+                        if !result.is_empty() {
+                            result.push('\n');
+                        }
+                        result.push_str(&section.content);
+                        if !section.content.ends_with('\n') {
+                            result.push('\n');
+                        }
                     }
                 }
                 None => {
@@ -205,12 +222,12 @@ pub fn extract_diff_for_files(
 }
 
 #[derive(Debug)]
-struct DiffSection {
-    path: String,
-    content: String,
+pub struct DiffSection {
+    pub path: String,
+    pub content: String,
 }
 
-fn split_diff_by_file(full_diff: &str) -> Vec<DiffSection> {
+pub fn split_diff_by_file(full_diff: &str) -> Vec<DiffSection> {
     let mut sections = Vec::new();
     let mut current_lines: Vec<&str> = Vec::new();
     let mut current_path: Option<String> = None;
@@ -498,5 +515,41 @@ mod tests {
             Some("src/lib.rs".to_string())
         );
         assert_eq!(parse_diff_git_path("not a diff line"), None);
+    }
+
+    #[test]
+    fn test_extract_diff_with_out_of_range_lines_falls_back_to_full_section() {
+        let refs = vec![("src/lib.rs".to_string(), Some((100, 200)))];
+        let result = extract_diff_for_files(multi_file_diff(), &refs);
+        assert!(
+            result.contains("diff --git a/src/lib.rs"),
+            "should fall back to full section when diff_lines are out of range"
+        );
+        assert!(result.contains("+use crate::new;"));
+    }
+
+    #[test]
+    fn test_extract_diff_with_partially_out_of_range_start() {
+        let lines_count = multi_file_diff()
+            .lines()
+            .take_while(|l| !l.starts_with("diff --git a/src/new.rs"))
+            .count();
+        let refs = vec![(
+            "src/lib.rs".to_string(),
+            Some((lines_count + 1, lines_count + 50)),
+        )];
+        let result = extract_diff_for_files(multi_file_diff(), &refs);
+        assert!(
+            !result.is_empty(),
+            "should fall back to full section when start exceeds section length"
+        );
+    }
+
+    #[test]
+    fn test_split_diff_by_file_is_public() {
+        let sections = split_diff_by_file(multi_file_diff());
+        assert_eq!(sections.len(), 2);
+        assert!(!sections[0].content.is_empty());
+        assert!(!sections[1].content.is_empty());
     }
 }

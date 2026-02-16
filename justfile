@@ -1,6 +1,10 @@
 # Sherpa development tasks
 
-# Build Tailwind CSS
+# Install frontend dependencies
+vendor-install:
+    npm install
+
+# Build Tailwind CSS + copy vendor assets
 css-build:
     npm run build
 

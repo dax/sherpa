@@ -795,6 +795,21 @@ fn chrono_now() -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
+fn resolve_file_diff(
+    session_diff: &str,
+    step: &ReviewStep,
+    path: &str,
+    diff_lines: Option<(usize, usize)>,
+) -> String {
+    let source = if session_diff.is_empty() {
+        step.step_diff.as_deref().unwrap_or("")
+    } else {
+        session_diff
+    };
+    let refs = vec![(path.to_string(), diff_lines)];
+    git_analysis::extract_diff_for_files(source, &refs)
+}
+
 #[debug_handler]
 async fn step_page(
     ViewEngine(v): ViewEngine<TeraView>,
@@ -832,8 +847,7 @@ async fn step_page(
         .file_refs
         .iter()
         .map(|f| {
-            let refs = vec![(f.path.clone(), f.diff_lines)];
-            let diff = git_analysis::extract_diff_for_files(&session.diff, &refs);
+            let diff = resolve_file_diff(&session.diff, step, &f.path, f.diff_lines);
             let validated = step_validation.is_file_validated(&f.path);
             serde_json::json!({
                 "path": f.path,
@@ -1402,10 +1416,7 @@ async fn step_validate_file(
         .file_refs
         .iter()
         .find(|f| f.path == form.file_path)
-        .map(|f| {
-            let refs = vec![(f.path.clone(), f.diff_lines)];
-            git_analysis::extract_diff_for_files(&session.diff, &refs)
-        })
+        .map(|f| resolve_file_diff(&session.diff, step, &f.path, f.diff_lines))
         .unwrap_or_default();
 
     format::render().view(

@@ -1,46 +1,123 @@
 {% extends "base.html" %}
 
-{% block title %}Sherpa — Analyze Repository{% endblock %}
+{% block title %}Sherpa — Start a Review{% endblock %}
 
 {% block content %}
 <div class="flex flex-col items-center justify-center min-h-screen px-4 py-8">
     <div class="card bg-base-100 shadow-xl max-w-lg w-full">
         <div class="card-body">
-            <h1 class="card-title text-2xl font-bold justify-center">Analyze Repository</h1>
-            <p class="text-base-content/70 text-center mb-4">Enter the path to your local Git repository to analyze branch changes.</p>
+            <h1 class="card-title text-2xl font-bold justify-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7 text-primary" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
+                    <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm9.707 5.707a1 1 0 00-1.414-1.414L9 12.586l-1.293-1.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                </svg>
+                Start a Review
+            </h1>
+            <p class="text-base-content/70 text-center mb-4">Review code changes from a local branch or a GitHub Pull Request.</p>
 
-            <div id="repo-feedback"></div>
+            <nav class="tabs tabs-bordered flex w-full" aria-label="Review type" role="tablist" aria-orientation="horizontal">
+                <button type="button" class="tab active-tab:tab-active active" style="flex:1" id="tab-local-btn" data-tab="#tab-local-panel" aria-controls="tab-local-panel" role="tab" aria-selected="true">
+                    📁 Local Repository
+                </button>
+                <button type="button" class="tab active-tab:tab-active" style="flex:1" id="tab-pr-btn" data-tab="#tab-pr-panel" aria-controls="tab-pr-panel" role="tab" aria-selected="false">
+                    🔗 GitHub PR
+                </button>
+            </nav>
 
-            <form hx-post="/repo/analyze"
-                  hx-target="#repo-feedback"
-                  hx-swap="innerHTML"
-                  hx-indicator="#loading-spinner">
+            <div class="mt-4">
+                <div id="tab-local-panel" role="tabpanel" aria-labelledby="tab-local-btn">
+                    <div id="repo-feedback"></div>
 
-                <div class="form-control w-full">
-                    <label class="label" for="repo-path">
-                        <span class="label-text">Repository Path</span>
-                    </label>
-                    <input type="text"
-                           name="path"
-                           id="repo-path"
-                           placeholder="/path/to/your/repo"
-                           class="input input-bordered w-full font-mono"
-                           required />
+                    <form hx-post="/repo/analyze"
+                          hx-target="#repo-feedback"
+                          hx-swap="innerHTML"
+                          hx-indicator="#loading-spinner-local">
+
+                        <div class="form-control w-full">
+                            <label class="label" for="repo-path">
+                                <span class="label-text">Repository Path</span>
+                            </label>
+                            <div class="join w-full">
+                                <span class="join-item btn btn-ghost no-animation pointer-events-none px-3">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-base-content/50" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4l2 2h4a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clip-rule="evenodd" />
+                                    </svg>
+                                </span>
+                                <input type="text"
+                                       name="path"
+                                       id="repo-path"
+                                       placeholder="/path/to/your/repo"
+                                       class="input input-bordered w-full font-mono join-item"
+                                       required />
+                            </div>
+                            <label class="label">
+                                <span class="label-text-alt text-base-content/40">Must be on a feature branch (not main/master)</span>
+                            </label>
+                        </div>
+
+                        <div class="card-actions mt-4 justify-center">
+                            <button type="submit" class="btn btn-primary w-full gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" />
+                                </svg>
+                                Analyze Repository
+                            </button>
+                        </div>
+                    </form>
+
+                    <div class="flex justify-center mt-2">
+                        <span id="loading-spinner-local" class="loading loading-spinner loading-lg htmx-indicator"></span>
+                    </div>
                 </div>
 
-                <div class="card-actions mt-6 justify-center">
-                    <button type="submit" class="btn btn-primary w-full">
-                        Analyze Repository
-                    </button>
-                </div>
-            </form>
+                <div id="tab-pr-panel" class="hidden" role="tabpanel" aria-labelledby="tab-pr-btn">
+                    <div id="pr-feedback"></div>
 
-            <div class="flex justify-center mt-2">
-                <span id="loading-spinner" class="loading loading-spinner loading-lg htmx-indicator"></span>
+                    <form hx-post="/repo/pr"
+                          hx-target="#pr-feedback"
+                          hx-swap="innerHTML"
+                          hx-indicator="#loading-spinner-pr">
+
+                        <div class="form-control w-full">
+                            <label class="label" for="pr-url">
+                                <span class="label-text">Pull Request URL</span>
+                            </label>
+                            <div class="join w-full">
+                                <span class="join-item btn btn-ghost no-animation pointer-events-none px-3">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-base-content/50" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M12.316 3.051a1 1 0 01.633 1.265l-4 12a1 1 0 11-1.898-.632l4-12a1 1 0 011.265-.633zM5.707 6.293a1 1 0 010 1.414L3.414 10l2.293 2.293a1 1 0 11-1.414 1.414l-3-3a1 1 0 010-1.414l3-3a1 1 0 011.414 0zm8.586 0a1 1 0 011.414 0l3 3a1 1 0 010 1.414l-3 3a1 1 0 11-1.414-1.414L16.586 10l-2.293-2.293a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                    </svg>
+                                </span>
+                                <input type="text"
+                                       name="url"
+                                       id="pr-url"
+                                       placeholder="https://github.com/owner/repo/pull/123"
+                                       class="input input-bordered w-full font-mono join-item"
+                                       required />
+                            </div>
+                            <label class="label">
+                                <span class="label-text-alt text-base-content/40">Also accepts: owner/repo#123</span>
+                            </label>
+                        </div>
+
+                        <div class="card-actions mt-4 justify-center">
+                            <button type="submit" class="btn btn-primary w-full gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v3.586L7.707 9.293a1 1 0 00-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 10.586V7z" clip-rule="evenodd" />
+                                </svg>
+                                Fetch &amp; Analyze PR
+                            </button>
+                        </div>
+                    </form>
+
+                    <div class="flex justify-center mt-2">
+                        <span id="loading-spinner-pr" class="loading loading-spinner loading-lg htmx-indicator"></span>
+                    </div>
+                </div>
             </div>
 
             <div class="text-center mt-4">
-                <a href="/" class="link link-primary text-sm">Back to Home</a>
+                <a href="/" class="link link-primary text-sm">← Back to Home</a>
             </div>
         </div>
     </div>

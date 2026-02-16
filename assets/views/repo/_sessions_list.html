@@ -1,6 +1,12 @@
 {% if sessions | length > 0 %}
 <div class="w-full max-w-lg mt-8">
-    <h2 class="text-lg font-semibold mb-3">Existing Reviews</h2>
+    <h2 class="text-lg font-semibold mb-3 flex items-center gap-2">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-base-content/50" viewBox="0 0 20 20" fill="currentColor">
+            <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
+            <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd" />
+        </svg>
+        Existing Reviews
+    </h2>
 
     {% if has_active %}
     <div class="space-y-2">
@@ -10,10 +16,27 @@
            class="card bg-base-100 shadow-sm hover:shadow-md transition-shadow block">
             <div class="card-body p-4">
                 <div class="flex items-center gap-3">
-                    {% if s.is_live %}
-                    <span class="badge badge-primary badge-sm">Live</span>
+                    {% if s.is_pr %}
+                    <span class="badge badge-accent badge-sm gap-1" title="GitHub Pull Request">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z"/>
+                        </svg>
+                        PR
+                    </span>
+                    {% elif s.is_live %}
+                    <span class="badge badge-primary badge-sm gap-1">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M5.05 3.636a1 1 0 010 1.414 7 7 0 000 9.9 1 1 0 11-1.414 1.414 9 9 0 010-12.728 1 1 0 011.414 0zm9.9 0a1 1 0 011.414 0 9 9 0 010 12.728 1 1 0 11-1.414-1.414 7 7 0 000-9.9 1 1 0 010-1.414zM7.879 6.464a1 1 0 010 1.414 3 3 0 000 4.243 1 1 0 11-1.415 1.414 5 5 0 010-7.07 1 1 0 011.415 0zm4.242 0a1 1 0 011.415 0 5 5 0 010 7.072 1 1 0 01-1.415-1.415 3 3 0 000-4.242 1 1 0 010-1.415zM10 9a1 1 0 100 2 1 1 0 000-2z" clip-rule="evenodd" />
+                        </svg>
+                        Live
+                    </span>
                     {% else %}
-                    <span class="badge badge-ghost badge-sm">Post-hoc</span>
+                    <span class="badge badge-ghost badge-sm gap-1">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M2 6a2 2 0 012-2h4l2 2h4a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" clip-rule="evenodd" />
+                        </svg>
+                        Local
+                    </span>
                     {% endif %}
 
                     <div class="flex-1 min-w-0">
@@ -64,6 +87,10 @@
                             </svg>
                             Done
                         </span>
+
+                        {% if s.is_pr %}
+                        <span class="badge badge-accent badge-outline badge-xs" title="GitHub PR">PR</span>
+                        {% endif %}
 
                         <div class="flex-1 min-w-0">
                             <span class="font-medium truncate block">{{ s.repo_name }}</span>

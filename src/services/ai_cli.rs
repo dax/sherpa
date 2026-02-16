@@ -167,8 +167,12 @@ pub fn review_plan_instruction() -> &'static str {
        ]\n\
      }\n\
      ```\n\
-     Use diff_lines to reference specific line ranges within each file's diff section, \
-     or null for the entire file. Order steps in recommended review sequence."
+     diff_lines references 1-indexed line numbers within the file's diff output \
+     (NOT source file line numbers). Line 1 is the 'diff --git ...' header. \
+     For example, if a file's diff section is 30 lines long, valid values are \
+     [1, 30]. Use null for the entire file's diff — prefer null unless you need \
+     to split a single file across multiple steps. Order steps in recommended \
+     review sequence."
 }
 
 pub fn step_explanation_instruction(step_title: &str, step_diff: &str) -> String {

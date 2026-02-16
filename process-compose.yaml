@@ -14,8 +14,14 @@ processes:
       css-build:
         condition: process_completed_successfully
 
+  vendor-install:
+    command: just vendor-install
+
   css-build:
     command: just css-build
+    depends_on:
+      vendor-install:
+        condition: process_completed_successfully
 
   css-watch:
     command: just css-watch
