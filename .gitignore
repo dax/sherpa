@@ -30,8 +30,9 @@ assets/static/js/
 # OS files
 .DS_Store
 
-# devbox
+# devbox / devenv
 .devbox
+.devenv
 .direnv
 
 # Beads local state
