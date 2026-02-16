@@ -2,15 +2,113 @@
 
 {% block title %}Sherpa — Step {{ step_number }}: {{ step_title }}{% endblock %}
 
+{% block navbar %}
+<nav class="navbar bg-base-100 border-b border-base-300 px-3 sm:px-6 py-2 sticky top-0 z-40">
+    <div class="flex-1 flex items-center gap-2 sm:gap-3 min-w-0">
+        <button type="button"
+                class="btn btn-ghost btn-sm btn-square md:hidden shrink-0"
+                aria-haspopup="dialog"
+                aria-expanded="false"
+                aria-controls="step-sidebar-drawer"
+                data-overlay="#step-sidebar-drawer">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+        </button>
+        <a href="/" class="font-bold text-lg text-primary hover:text-primary/80 transition-colors shrink-0">Sherpa</a>
+        <span class="text-base-content/20 hidden sm:inline">/</span>
+        <span class="font-mono text-sm text-base-content/60 truncate max-w-24 sm:max-w-48 hidden sm:inline">{{ branch }}</span>
+    </div>
+    <div class="breadcrumbs text-sm hidden sm:block">
+        <ul>
+            <li><a href="/review/{{ session_id }}/summary">Summary</a></li>
+            <li class="breadcrumbs-separator" aria-hidden="true">/</li>
+            <li><a href="/review/{{ session_id }}/guide">Guide</a></li>
+            <li class="breadcrumbs-separator" aria-hidden="true">/</li>
+            <li>Step {{ step_number }}</li>
+        </ul>
+    </div>
+    <div class="sm:hidden text-sm text-base-content/60 font-medium">
+        Step {{ step_number }}/{{ total_steps }}
+    </div>
+</nav>
+{% endblock %}
+
 {% block content %}
-<div class="flex min-h-screen">
-    <aside class="w-80 bg-base-100 border-r border-base-300 p-4 overflow-y-auto">
-        <div class="mb-4">
+{# --- Mobile sidebar drawer (hidden on md+) --- #}
+<aside id="step-sidebar-drawer"
+       class="overlay overlay-open:translate-x-0 drawer drawer-start hidden md:hidden"
+       role="dialog"
+       tabindex="-1">
+    <div class="drawer-header">
+        <h3 class="drawer-title text-lg font-bold">Review Plan</h3>
+        <button type="button"
+                class="btn btn-text btn-circle btn-sm absolute end-3 top-3"
+                aria-label="Close"
+                data-overlay="#step-sidebar-drawer">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+        </button>
+    </div>
+    <div class="drawer-body p-2">
+        {% set_global validated_count = 0 %}
+        {% for s in steps %}{% if s.validated %}{% set_global validated_count = validated_count + 1 %}{% endif %}{% endfor %}
+        <div class="flex items-center gap-2 px-2 mb-3">
+            <div class="flex-1 bg-base-300 rounded-full h-1.5">
+                <div class="bg-success rounded-full h-1.5 transition-all duration-500"
+                     style="width: {% if total_steps > 0 %}{{ validated_count * 100 / total_steps }}{% else %}0{% endif %}%">
+                </div>
+            </div>
+            <span class="text-xs text-base-content/50">{{ validated_count }}/{{ total_steps }}</span>
+        </div>
+        <div class="space-y-0.5">
+            {% for step in steps %}
+            {% if is_live and step.status == "Planned" %}
+            <div class="step-item opacity-40">
+                <span class="font-mono text-xs text-base-content/40 w-5 shrink-0 text-center mt-0.5">{{ step.number }}</span>
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm truncate">{{ step.title }}</div>
+                    <div class="text-xs text-base-content/30 italic">Waiting for agent...</div>
+                </div>
+            </div>
+            {% else %}
+            <a href="/review/{{ session_id }}/guide/step/{{ step.number }}"
+               class="step-item {% if step.active %}step-item--active{% elif step.validated %}step-item--validated{% endif %}">
+                <span class="font-mono text-xs text-base-content/50 w-5 shrink-0 text-center mt-0.5">{{ step.number }}</span>
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm flex items-center gap-1.5">
+                        {% if step.validated %}
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 text-success shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                        </svg>
+                        {% endif %}
+                        <span class="truncate">{{ step.title }}</span>
+                    </div>
+                    <div class="text-xs text-base-content/40 mt-0.5">
+                        {{ step.file_count }} file{% if step.file_count != 1 %}s{% endif %}
+                    </div>
+                </div>
+            </a>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+</aside>
+
+<div class="flex" style="height: calc(100vh - 3.5rem);">
+    {# --- Desktop sidebar (hidden on mobile) --- #}
+    <aside class="w-80 bg-base-100 border-r border-base-300 flex-col shrink-0 hidden md:flex">
+        <div class="p-4 border-b border-base-300">
             <h2 class="text-lg font-bold">Review Plan</h2>
-            <p class="text-sm text-base-content/60 mt-1">
-                {{ branch }} &rarr; {{ default_branch }}
-            </p>
-            <p class="text-xs text-base-content/50 mt-1">{{ total_steps }} steps</p>
+            <div class="flex items-center gap-2 mt-3">
+                <div class="flex-1 bg-base-300 rounded-full h-1.5">
+                    <div class="bg-success rounded-full h-1.5 transition-all duration-500"
+                         style="width: {% if total_steps > 0 %}{{ validated_count * 100 / total_steps }}{% else %}0{% endif %}%">
+                    </div>
+                </div>
+                <span class="text-xs text-base-content/50">{{ validated_count }}/{{ total_steps }}</span>
+            </div>
             {% if is_live %}
             <a href="/review/{{ session_id }}/guide" class="btn btn-ghost btn-xs mt-2 w-full">
                 View Guide
@@ -18,64 +116,47 @@
             {% endif %}
         </div>
 
-        <ul class="steps steps-vertical w-full">
+        <div class="flex-1 overflow-y-auto p-2 space-y-0.5">
             {% for step in steps %}
-            <li class="step {% if step.active %}step-primary{% elif step.validated %}step-success{% elif is_live and step.status == 'ReadyForReview' %}step-accent{% endif %}">
-                {% if is_live and step.status == "Planned" %}
-                <div class="w-full">
-                    <div class="text-left w-full py-2">
-                        <div class="font-medium text-sm text-base-content/40">{{ step.title }}</div>
-                        <div class="text-xs text-base-content/30 italic">Waiting for agent...</div>
+            {% if is_live and step.status == "Planned" %}
+            <div class="step-item opacity-40">
+                <span class="font-mono text-xs text-base-content/40 w-5 shrink-0 text-center mt-0.5">{{ step.number }}</span>
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm truncate">{{ step.title }}</div>
+                    <div class="text-xs text-base-content/30 italic">Waiting for agent...</div>
+                </div>
+            </div>
+            {% else %}
+            <a href="/review/{{ session_id }}/guide/step/{{ step.number }}"
+               class="step-item {% if step.active %}step-item--active{% elif step.validated %}step-item--validated{% endif %}">
+                <span class="font-mono text-xs text-base-content/50 w-5 shrink-0 text-center mt-0.5">{{ step.number }}</span>
+                <div class="flex-1 min-w-0">
+                    <div class="text-sm flex items-center gap-1.5">
+                        {% if step.validated %}
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 text-success shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                        </svg>
+                        {% endif %}
+                        <span class="truncate">{{ step.title }}</span>
+                    </div>
+                    <div class="text-xs text-base-content/40 mt-0.5">
+                        {{ step.file_count }} file{% if step.file_count != 1 %}s{% endif %}
                     </div>
                 </div>
-                {% else %}
-                <a href="/review/{{ session_id }}/guide/step/{{ step.number }}" class="w-full">
-                    <div class="text-left w-full py-2">
-                        <div class="font-medium text-sm flex items-center gap-1">
-                            {% if step.validated %}
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-success inline-block shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
-                            </svg>
-                            {% endif %}
-                            {{ step.title }}
-                        </div>
-                        <div class="text-xs text-base-content/50">
-                            {{ step.file_count }} file{% if step.file_count != 1 %}s{% endif %}
-                        </div>
-                    </div>
-                </a>
-                {% endif %}
-            </li>
-            {% endfor %}
-        </ul>
-
-        <div class="mt-6">
-            <a href="/review/{{ session_id }}/summary" class="btn btn-ghost btn-sm w-full">
-                Back to Summary
             </a>
+            {% endif %}
+            {% endfor %}
         </div>
     </aside>
 
-    <main class="flex-1 p-6 overflow-y-auto">
+    <main class="flex-1 p-3 sm:p-6 overflow-y-auto bg-base-200">
         <div class="max-w-4xl mx-auto">
-            <div class="flex items-center gap-3 mb-6">
-                <span class="badge badge-primary badge-lg font-mono">Step {{ step_number }} of {{ total_steps }}</span>
-                <h1 class="text-2xl font-bold">{{ step_title }}</h1>
+            <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-6">
+                <span class="badge badge-primary badge-lg font-mono shrink-0">Step {{ step_number }} of {{ total_steps }}</span>
+                <h1 class="text-xl sm:text-2xl font-bold">{{ step_title }}</h1>
             </div>
 
             <p class="text-base-content/70 mb-4">{{ step_rationale }}</p>
-
-            <div class="flex flex-wrap gap-2 mb-4">
-                {% for fd in file_diffs %}
-                <span class="badge badge-sm font-mono {% if fd.validated %}badge-success{% else %}badge-outline{% endif %}">
-                    {% if fd.validated %}✓{% endif %} {{ fd.path }}
-                </span>
-                {% endfor %}
-            </div>
-
-            <div class="mb-4 text-sm text-base-content/60">
-                <span id="file-progress">{{ validated_file_count }}/{{ total_file_count }}</span> files validated
-            </div>
 
             <div class="space-y-4">
                 <div id="step-explanation-section"
@@ -100,11 +181,11 @@
                         <div class="space-y-2">
                             {% for fd in file_diffs %}
                             <details id="file-{{ loop.index0 }}" class="bg-base-200 rounded-lg group {% if fd.validated %}opacity-60{% endif %}" {% if not fd.validated %}open{% endif %}>
-                                <summary class="flex items-center gap-2 px-4 py-2 cursor-pointer select-none font-medium">
+                                <summary class="flex items-center gap-2 px-2 sm:px-4 py-2 cursor-pointer select-none font-medium">
                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0 transition-transform group-open:rotate-90" viewBox="0 0 20 20" fill="currentColor">
                                         <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
                                     </svg>
-                                    <span class="font-mono text-sm">{{ fd.path }}</span>
+                                    <span class="font-mono text-xs sm:text-sm truncate min-w-0">{{ fd.path }}</span>
                                     {% if fd.validated %}
                                     <span class="badge badge-success badge-xs ml-auto">✓ Validated</span>
                                     {% else %}
@@ -118,7 +199,7 @@
                                     </form>
                                     {% endif %}
                                 </summary>
-                                <div class="px-4 pb-3">
+                                <div class="px-2 sm:px-4 pb-3 overflow-x-auto">
                                     <div class="diff-file-container" data-diff="{{ fd.diff | json_encode() }}"></div>
                                 </div>
                             </details>
@@ -130,11 +211,15 @@
                 <div class="card bg-base-100 shadow">
                     <div class="card-body">
                         <h2 class="card-title text-lg">Chat</h2>
-                        <div id="step-chat-history" class="space-y-3 max-h-96 overflow-y-auto">
+                        <div id="step-chat-history" class="space-y-3 max-h-[50vh] sm:max-h-96 overflow-y-auto">
                             {% for msg in chat_messages %}
                             <div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %} {% if msg.is_current_step %}{% else %}opacity-50{% endif %}">
                                 <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
+                                    {% if msg.role == 'user' %}
                                     {{ msg.content | safe }}
+                                    {% else %}
+                                    <div class="prose prose-sm max-w-none">{{ msg.content | safe }}</div>
+                                    {% endif %}
                                 </div>
                                 <div class="chat-footer text-xs text-base-content/50">
                                     {% if msg.step_number %}Step {{ msg.step_number }} &middot; {% endif %}{{ msg.timestamp }}
@@ -148,30 +233,34 @@
                               hx-swap="beforeend"
                               hx-on::after-request="this.reset(); document.getElementById('step-chat-history').scrollTop = document.getElementById('step-chat-history').scrollHeight"
                               hx-indicator="#step-chat-spinner"
-                              class="flex gap-2 mt-4">
+                              class="flex gap-2 mt-4 bg-base-200/50 rounded-xl p-3">
                             <input type="text"
                                    name="message"
                                    placeholder="Ask about this step's changes..."
-                                   class="input input-bordered flex-1"
+                                   class="input input-bordered flex-1 bg-base-100"
                                    required
                                    autocomplete="off" />
-                            <button type="submit" class="btn btn-primary">Send</button>
+                            <button type="submit" class="btn btn-primary btn-circle">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+                                </svg>
+                            </button>
                             <span id="step-chat-spinner" class="loading loading-spinner htmx-indicator"></span>
                         </form>
                     </div>
                 </div>
             </div>
 
-            <div class="flex justify-between mt-6">
+            <div class="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-3 mt-8 pt-4 border-t border-base-300">
                 {% if has_previous %}
-                <a href="/review/{{ session_id }}/guide/step/{{ step_number - 1 }}" class="btn btn-outline btn-sm">
-                    &larr; {{ prev_step_title }}
+                <a href="/review/{{ session_id }}/guide/step/{{ step_number - 1 }}" class="btn btn-outline btn-sm sm:btn-md">
+                    &larr; <span class="hidden sm:inline">{{ prev_step_title }}</span><span class="sm:hidden">Previous</span>
                 </a>
                 {% else %}
                 <div></div>
                 {% endif %}
 
-                <div id="step-nav" class="flex gap-2 items-center">
+                <div id="step-nav" class="flex flex-wrap gap-2 sm:gap-3 items-center justify-end">
                     {% if current_step_validated %}
                     <span class="badge badge-success badge-lg gap-1">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -187,7 +276,7 @@
                             <input type="checkbox" name="block" value="true" class="checkbox checkbox-warning checkbox-xs" />
                             <span>Block agent</span>
                         </label>
-                        <button type="submit" class="btn btn-warning btn-sm">Request Revision</button>
+                        <button type="submit" class="btn btn-warning">Request Revision</button>
                     </form>
                     {% endif %}
 
@@ -197,12 +286,12 @@
 
                     {% if step_number < total_steps %}
                     <a href="/review/{{ session_id }}/guide/step/{{ step_number + 1 }}"
-                       class="btn btn-primary btn-sm {% if not current_step_validated %}btn-disabled{% endif %}">
+                       class="btn btn-primary {% if not current_step_validated %}btn-disabled{% endif %}">
                         Next Step &rarr;
                     </a>
                     {% else %}
                     <a href="/review/{{ session_id }}/summary"
-                       class="btn btn-primary btn-sm {% if not current_step_validated %}btn-disabled{% endif %}">
+                       class="btn btn-primary {% if not current_step_validated %}btn-disabled{% endif %}">
                         Back to Summary
                     </a>
                     {% endif %}

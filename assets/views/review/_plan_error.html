@@ -1,16 +1,16 @@
 <div id="start-review-area" class="mt-6">
-    <div class="alert alert-error" role="alert">
-        <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+    <div class="flex items-start gap-3 p-4 rounded-lg border-l-4 border-error bg-base-100">
+        <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5 text-error mt-0.5" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
         </svg>
-        <span>{{ error }}</span>
+        <span class="text-sm text-base-content/70">{{ error }}</span>
     </div>
     <div class="flex gap-2 mt-3">
         <button hx-post="/review/{{ session_id }}/guide/start"
                 hx-target="#start-review-area"
                 hx-swap="outerHTML"
                 hx-indicator="#plan-retry-spinner"
-                class="btn btn-outline">
+                class="btn btn-outline btn-error">
             <span id="plan-retry-spinner" class="loading loading-spinner loading-xs htmx-indicator"></span>
             Retry
         </button>

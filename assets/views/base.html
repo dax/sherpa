@@ -8,23 +8,52 @@
     <!-- Tailwind CSS + FlyonUI (local build) -->
     <link href="/static/css/app.css" rel="stylesheet">
 
-    <!-- diff2html CSS -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html@3.4.56/bundles/css/diff2html.min.css">
+    <link rel="stylesheet" href="/static/css/diff2html.min.css">
+    <link rel="stylesheet" href="/static/css/github-dark.min.css">
 
     {% block head %}{% endblock %}
 </head>
 <body class="min-h-screen bg-base-200">
+    {% block navbar %}{% endblock %}
     {% block content %}{% endblock %}
 
-    <!-- HTMX -->
-    <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.8/dist/htmx.min.js"></script>
-
-    <!-- FlyonUI JavaScript -->
+    <script src="/static/js/htmx.min.js"></script>
     <script src="/static/js/flyonui.js"></script>
+    <script src="/static/js/diff2html.min.js"></script>
+    <script src="/static/js/diff2html-ui.min.js"></script>
+    <script src="/static/js/highlight.min.js"></script>
+    <script>
+    hljs.highlightAll();
+    document.body.addEventListener('htmx:afterSwap', function() {
+        hljs.highlightAll();
+        enhanceAnalysisBlocks();
+    });
 
-    <!-- diff2html JavaScript -->
-    <script src="https://cdn.jsdelivr.net/npm/diff2html@3.4.56/bundles/js/diff2html.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/diff2html@3.4.56/bundles/js/diff2html-ui.min.js"></script>
+    function enhanceAnalysisBlocks() {
+        var labels = {
+            'What': '📋',
+            'Why': '💡',
+            'Key details': '🔍',
+            'Key Details': '🔍',
+            'How': '⚙️',
+            'Impact': '⚡',
+            'Concern': '⚠️',
+            'Concerns': '⚠️',
+            'Note': '📝',
+            'Notes': '📝'
+        };
+        document.querySelectorAll('.prose p > strong:first-child, .prose li > strong:first-child').forEach(function(el) {
+            if (el.dataset.enhanced) return;
+            var text = el.textContent.trim().replace(/:$/, '');
+            if (labels[text]) {
+                el.dataset.enhanced = 'true';
+                el.textContent = labels[text] + ' ' + el.textContent;
+                el.closest('p, li').classList.add('analysis-label-block');
+            }
+        });
+    }
+    enhanceAnalysisBlocks();
+    </script>
 
     {% block scripts %}{% endblock %}
 </body>

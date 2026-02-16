@@ -3,22 +3,37 @@
 {% block title %}Sherpa — AI-Guided Code Review{% endblock %}
 
 {% block content %}
-<div class="flex items-center justify-center min-h-screen">
+<div class="flex items-center justify-center min-h-screen px-4">
     <div class="card bg-base-100 shadow-xl max-w-lg w-full">
         <div class="card-body items-center text-center">
+            <div class="text-primary mb-1">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-14 h-14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 20L8 15L13 18L21 4" />
+                    <path d="M21 4L15 4L21 10" />
+                    <circle cx="8" cy="15" r="1.5" fill="currentColor" stroke="none" />
+                </svg>
+            </div>
             <h1 class="card-title text-3xl font-bold">{{ app_name }}</h1>
-            <p class="text-base-content/70">AI-Guided Code Review Tool</p>
+            <p class="text-base-content/60">Your AI guide through code review</p>
+
+            <div class="flex flex-wrap justify-center gap-x-4 gap-y-1 mt-3 text-xs text-base-content/40">
+                <span>AI-organized steps</span>
+                <span class="hidden sm:inline">&middot;</span>
+                <span>Interactive chat</span>
+                <span class="hidden sm:inline">&middot;</span>
+                <span>Progress tracking</span>
+            </div>
 
             <div class="divider"></div>
 
             {% if selected_cli %}
             <div class="flex items-center gap-2 mb-2">
-                <span class="badge badge-success">AI Backend</span>
-                <span class="font-semibold">
+                <span class="badge badge-success badge-sm">AI Backend</span>
+                <span class="font-semibold text-sm">
                     {% if selected_cli == "opencode" %}OpenCode{% elif selected_cli == "claude" %}Claude Code{% endif %}
                 </span>
             </div>
-            <a href="/cli/setup" class="link link-primary text-sm">Change AI backend</a>
+            <a href="/cli/setup" class="link link-primary text-xs">Change AI backend</a>
             {% else %}
             <div class="alert alert-warning mt-2" role="alert">
                 <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -30,11 +45,11 @@
 
             <div class="card-actions mt-4 w-full">
                 {% if selected_cli %}
-                <a href="/repo/analyze" class="btn btn-primary w-full">
+                <a href="/repo/analyze" class="btn btn-primary w-full btn-lg">
                     Start Review
                 </a>
                 {% else %}
-                <a href="/cli/setup" class="btn btn-primary w-full">
+                <a href="/cli/setup" class="btn btn-primary w-full btn-lg">
                     Set Up AI Backend
                 </a>
                 {% endif %}

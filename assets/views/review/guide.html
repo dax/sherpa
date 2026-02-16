@@ -2,17 +2,27 @@
 
 {% block title %}Sherpa — Review Guide{% endblock %}
 
+{% block navbar %}
+<nav class="navbar bg-base-100 border-b border-base-300 px-3 sm:px-6 py-2 sticky top-0 z-40">
+    <div class="flex-1 flex items-center gap-2 sm:gap-3 min-w-0">
+        <a href="/" class="font-bold text-lg text-primary hover:text-primary/80 transition-colors shrink-0">Sherpa</a>
+        <span class="text-base-content/20 hidden sm:inline">/</span>
+        <span class="font-mono text-sm text-base-content/60 truncate max-w-24 sm:max-w-48 hidden sm:inline">{{ branch }}</span>
+    </div>
+    <div class="breadcrumbs text-sm">
+        <ul>
+            <li><a href="/review/{{ session_id }}/summary">Summary</a></li>
+            <li class="breadcrumbs-separator" aria-hidden="true">/</li>
+            <li>Guide</li>
+        </ul>
+    </div>
+</nav>
+{% endblock %}
+
 {% block content %}
-<div class="container mx-auto max-w-4xl p-6">
-    <div class="flex items-center justify-between mb-6">
-        <div>
-            <h1 class="text-3xl font-bold">Review Guide</h1>
-            <p class="text-base-content/70 mt-1">
-                Branch <span class="font-mono font-semibold">{{ branch }}</span>
-                against <span class="font-mono font-semibold">{{ default_branch }}</span>
-            </p>
-        </div>
-        <a href="/review/{{ session_id }}/summary" class="btn btn-ghost btn-sm">Back to Summary</a>
+<div class="container mx-auto max-w-4xl px-3 py-4 sm:p-6">
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold">Review Guide</h1>
     </div>
 
     {% if is_live %}
@@ -29,6 +39,17 @@
         </span>
     </div>
     {% endif %}
+
+    {% set_global reviewed_count = 0 %}
+    {% for s in steps %}{% if s.status == "Reviewed" %}{% set_global reviewed_count = reviewed_count + 1 %}{% endif %}{% endfor %}
+    <div class="flex items-center gap-3 mb-4">
+        <div class="flex-1 bg-base-300 rounded-full h-2">
+            <div class="bg-success rounded-full h-2 transition-all duration-500"
+                 style="width: {% if total_steps > 0 %}{{ reviewed_count * 100 / total_steps }}{% else %}0{% endif %}%">
+            </div>
+        </div>
+        <span class="text-sm text-base-content/60 whitespace-nowrap">{{ reviewed_count }}/{{ total_steps }} reviewed</span>
+    </div>
 
     <div id="guide-steps-list"
          {% if is_live %}

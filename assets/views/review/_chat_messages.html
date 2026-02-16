@@ -1,7 +1,11 @@
 {% for msg in messages %}
 <div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %}">
     <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
+        {% if msg.role == 'user' %}
         {{ msg.content | safe }}
+        {% else %}
+        <div class="prose prose-sm max-w-none">{{ msg.content | safe }}</div>
+        {% endif %}
     </div>
     <div class="chat-footer text-xs text-base-content/50">{{ msg.timestamp }}</div>
 </div>

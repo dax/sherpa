@@ -38,3 +38,7 @@ assets/static/js/
 .beads/local/
 
 .local_envrc
+
+# Screenshots (from Playwright/agent testing)
+*.png
+!assets/static/image.png

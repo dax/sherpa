@@ -1,18 +1,18 @@
-<div id="{{ section_id }}-section" class="card bg-base-100 shadow border border-error/30">
+<div id="{{ section_id }}-section" class="card bg-base-100 shadow border-l-4 border-error">
     <div class="card-body">
         <h2 class="card-title text-lg">{{ title }}</h2>
-        <div class="alert alert-error mt-2" role="alert">
-            <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 2a10 10 0 100 20 10 10 0 000-20z" />
+        <div class="flex items-start gap-3 mt-2 text-sm text-base-content/70">
+            <svg xmlns="http://www.w3.org/2000/svg" class="shrink-0 size-5 text-error mt-0.5" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
             </svg>
             <span>{{ error }}</span>
         </div>
-        <div class="flex gap-2 mt-3">
+        <div class="flex gap-2 mt-4">
             <button hx-get="{{ retry_url }}"
                     hx-target="#{{ section_id }}-section"
                     hx-swap="outerHTML"
                     hx-indicator="#{{ section_id }}-retry-spinner"
-                    class="btn btn-sm btn-outline">
+                    class="btn btn-sm btn-outline btn-error">
                 <span id="{{ section_id }}-retry-spinner" class="loading loading-spinner loading-xs htmx-indicator"></span>
                 Retry
             </button>

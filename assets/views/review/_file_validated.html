@@ -13,7 +13,7 @@
 
 <span id="file-progress" hx-swap-oob="true">{{ validated_file_count }}/{{ total_file_count }}</span>
 
-<div id="step-nav" hx-swap-oob="true" class="flex gap-2 items-center">
+<div id="step-nav" hx-swap-oob="true" class="flex gap-3 items-center">
     {% if current_step_validated %}
     <span class="badge badge-success badge-lg gap-1">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -25,12 +25,12 @@
 
     {% if step_number < total_steps %}
     <a href="/review/{{ session_id }}/guide/step/{{ step_number + 1 }}"
-       class="btn btn-primary btn-sm {% if not current_step_validated %}btn-disabled{% endif %}">
+       class="btn btn-primary {% if not current_step_validated %}btn-disabled{% endif %}">
         Next Step &rarr;
     </a>
     {% else %}
     <a href="/review/{{ session_id }}/summary"
-       class="btn btn-primary btn-sm {% if not current_step_validated %}btn-disabled{% endif %}">
+       class="btn btn-primary {% if not current_step_validated %}btn-disabled{% endif %}">
         Back to Summary
     </a>
     {% endif %}

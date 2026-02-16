@@ -2,17 +2,25 @@
 
 {% block title %}Sherpa — Review Summary{% endblock %}
 
+{% block navbar %}
+<nav class="navbar bg-base-100 border-b border-base-300 px-3 sm:px-6 py-2 sticky top-0 z-40">
+    <div class="flex-1 flex items-center gap-2 sm:gap-3 min-w-0">
+        <a href="/" class="font-bold text-lg text-primary hover:text-primary/80 transition-colors shrink-0">Sherpa</a>
+        <span class="text-base-content/20 hidden sm:inline">/</span>
+        <span class="font-mono text-sm text-base-content/60 truncate max-w-24 sm:max-w-48 hidden sm:inline">{{ branch }}</span>
+        <span class="text-base-content/20 hidden md:inline">&rarr;</span>
+        <span class="font-mono text-sm text-base-content/40 truncate max-w-32 hidden md:inline">{{ default_branch }}</span>
+    </div>
+    <div class="flex items-center gap-2">
+        <span class="badge badge-outline badge-sm">Summary</span>
+    </div>
+</nav>
+{% endblock %}
+
 {% block content %}
-<div class="container mx-auto max-w-4xl p-6">
-    <div class="flex items-center justify-between mb-6">
-        <div>
-            <h1 class="text-3xl font-bold">Review Summary</h1>
-            <p class="text-base-content/70 mt-1">
-                Branch <span class="font-mono font-semibold">{{ branch }}</span>
-                against <span class="font-mono font-semibold">{{ default_branch }}</span>
-            </p>
-        </div>
-        <a href="/" class="btn btn-ghost btn-sm">Back to Home</a>
+<div class="container mx-auto max-w-4xl px-3 py-4 sm:p-6">
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold">Review Summary</h1>
     </div>
 
     {% if all_validated %}
@@ -36,19 +44,19 @@
             <div class="card-body">
                 <h2 class="card-title text-lg">Metrics</h2>
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-2">
-                    <div class="stat bg-base-200 rounded-lg p-4">
+                    <div class="stat bg-base-200 rounded-lg p-4 stat-files">
                         <div class="stat-title text-xs">Files Changed</div>
                         <div class="stat-value text-2xl">{{ metrics.files_changed }}</div>
                     </div>
-                    <div class="stat bg-base-200 rounded-lg p-4">
+                    <div class="stat bg-base-200 rounded-lg p-4 stat-added">
                         <div class="stat-title text-xs">Lines Added</div>
                         <div class="stat-value text-2xl text-success">+{{ metrics.lines_added }}</div>
                     </div>
-                    <div class="stat bg-base-200 rounded-lg p-4">
+                    <div class="stat bg-base-200 rounded-lg p-4 stat-removed">
                         <div class="stat-title text-xs">Lines Removed</div>
                         <div class="stat-value text-2xl text-error">-{{ metrics.lines_removed }}</div>
                     </div>
-                    <div class="stat bg-base-200 rounded-lg p-4">
+                    <div class="stat bg-base-200 rounded-lg p-4 stat-commits">
                         <div class="stat-title text-xs">Commits</div>
                         <div class="stat-value text-2xl">{{ metrics.commits_on_branch }}</div>
                     </div>
@@ -83,7 +91,7 @@
                             {% if step.explanation %}
                             <div>
                                 <h4 class="text-sm font-semibold text-base-content/70 mb-1">AI Explanation</h4>
-                                <div class="prose prose-sm max-w-none text-base-content/80">
+                                <div class="prose max-w-none">
                                     {{ step.explanation | safe }}
                                 </div>
                             </div>
@@ -95,8 +103,12 @@
                                 <div class="space-y-2">
                                     {% for msg in step.chat_messages %}
                                     <div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %}">
-                                        <div class="chat-bubble chat-bubble-sm {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
+                                        <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
+                                            {% if msg.role == 'user' %}
                                             {{ msg.content | safe }}
+                                            {% else %}
+                                            <div class="prose prose-sm max-w-none">{{ msg.content | safe }}</div>
+                                            {% endif %}
                                         </div>
                                         <div class="chat-footer text-xs text-base-content/50">{{ msg.timestamp }}</div>
                                     </div>
@@ -116,12 +128,16 @@
     <div class="card bg-base-100 shadow mt-6">
         <div class="card-body">
             <h2 class="card-title text-lg">Chat</h2>
-            <div id="chat-history" class="space-y-3 max-h-96 overflow-y-auto">
+            <div id="chat-history" class="space-y-3 max-h-[50vh] sm:max-h-96 overflow-y-auto">
                 {% for msg in chat_messages %}
                 <div class="chat {{ msg.role }}">
                     <div class="{% if msg.role == 'user' %}chat chat-end{% else %}chat chat-start{% endif %}">
                         <div class="chat-bubble {% if msg.role == 'user' %}chat-bubble-primary{% else %}chat-bubble-secondary{% endif %}">
+                            {% if msg.role == 'user' %}
                             {{ msg.content | safe }}
+                            {% else %}
+                            <div class="prose prose-sm max-w-none">{{ msg.content | safe }}</div>
+                            {% endif %}
                         </div>
                         <div class="chat-footer text-xs text-base-content/50">{{ msg.timestamp }}</div>
                     </div>
@@ -134,14 +150,18 @@
                   hx-swap="beforeend"
                   hx-on::after-request="this.reset(); document.getElementById('chat-history').scrollTop = document.getElementById('chat-history').scrollHeight"
                   hx-indicator="#chat-spinner"
-                  class="flex gap-2 mt-4">
+                  class="flex gap-2 mt-4 bg-base-200/50 rounded-xl p-3">
                 <input type="text"
                        name="message"
                        placeholder="Ask a question about the changes..."
-                       class="input input-bordered flex-1"
+                       class="input input-bordered flex-1 bg-base-100"
                        required
                        autocomplete="off" />
-                <button type="submit" class="btn btn-primary">Send</button>
+                <button type="submit" class="btn btn-primary btn-circle">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+                    </svg>
+                </button>
                 <span id="chat-spinner" class="loading loading-spinner htmx-indicator"></span>
             </form>
         </div>
