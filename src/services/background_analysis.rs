@@ -764,8 +764,6 @@ pub async fn check_analysis_status(
         .flatten()
         .is_some();
 
-    let summary_ready = approach_ready;
-
     let (plan_ready, step_count) =
         match review_sessions::Model::find_by_session_key(db, session_key).await {
             Ok(Some(model)) => {
@@ -777,6 +775,8 @@ pub async fn check_analysis_status(
             }
             _ => (false, None),
         };
+
+    let summary_ready = approach_ready && plan_ready;
 
     let steps_explained = if let Some(count) = step_count {
         let mut explained = 0;
