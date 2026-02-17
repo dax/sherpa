@@ -1,0 +1,33 @@
+{# Returned by the expand-fn endpoint. Swaps into the diff-file-container. #}
+<div class="diff-file-container"
+     data-diff="{{ expanded_diff | json_encode() }}"
+     data-original-diff="{{ original_diff | json_encode() }}"
+     data-file-path="{{ file_path }}"
+     data-expanded="true">
+</div>
+
+<script>
+(function() {
+    var el = document.currentScript.previousElementSibling;
+    if (!el) return;
+    var diffString = JSON.parse(el.getAttribute('data-diff'));
+    if (diffString && diffString.trim()) {
+        el.innerHTML = Diff2Html.html(diffString, {
+            drawFileList: false, matching: 'lines',
+            outputFormat: 'line-by-line', colorScheme: 'dark'
+        });
+        if (window.sherpa && window.sherpa.initLineSelection) {
+            window.sherpa.initLineSelection(el);
+        }
+        if (window.sherpa && window.sherpa.initExpandButtons) {
+            window.sherpa.initExpandButtons(el);
+        }
+        if (window.sherpa && window.sherpa.initChatDiffLinks) {
+            window.sherpa.initChatDiffLinks();
+        }
+        if (window.sherpa && window.sherpa.annotateDiscussedLines) {
+            window.sherpa.annotateDiscussedLines();
+        }
+    }
+})();
+</script>

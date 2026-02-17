@@ -260,6 +260,309 @@ fn parse_hunk_header(line: &str) -> (usize, usize) {
     }
 }
 
+/// Extract the function context from a unified diff string.
+///
+/// Looks at hunk headers (the text after `@@`) and hunk content to find the
+/// enclosing scope and function name.  Returns a breadcrumb like
+/// `impl TaskService > fn create_task` when the `@@` header shows an `impl`
+/// block and a `fn` definition is found in the hunk body.
+///
+/// When `source_info` is provided as `(repo_path, file_path)`, falls back to
+/// reading the source file and walking backward from the hunk start line to
+/// find the enclosing `fn` when the diff body has no fn definition.
+///
+/// Returns `None` when no meaningful context can be determined.
+pub fn extract_function_context(diff: &str, source_info: Option<(&Path, &str)>) -> Option<String> {
+    let mut contexts: Vec<String> = Vec::new();
+    let mut first_hunk_start: Option<usize> = None;
+
+    for line in diff.lines() {
+        if !line.starts_with("@@ ") {
+            continue;
+        }
+        if first_hunk_start.is_none() {
+            let (new_start, _) = parse_hunk_header(line);
+            if new_start > 0 {
+                first_hunk_start = Some(new_start);
+            }
+        }
+        let header_ctx = line
+            .splitn(3, "@@")
+            .nth(2)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        if let Some(ctx) = header_ctx {
+            if !contexts.contains(&ctx) {
+                contexts.push(ctx);
+            }
+        }
+    }
+
+    let mut fn_sigs: Vec<String> = Vec::new();
+    for line in diff.lines() {
+        let content = if let Some(rest) = line.strip_prefix(' ') {
+            rest
+        } else if let Some(rest) = line.strip_prefix('+') {
+            rest
+        } else {
+            continue;
+        };
+        if let Some(sig) = extract_fn_signature(content.trim()) {
+            if !fn_sigs.contains(&sig) {
+                fn_sigs.push(sig);
+            }
+        }
+    }
+
+    if fn_sigs.is_empty() {
+        if let (Some((repo_path, file_path)), Some(hunk_start)) = (source_info, first_hunk_start) {
+            if let Some(sig) = find_enclosing_fn_from_source(repo_path, file_path, hunk_start) {
+                fn_sigs.push(sig);
+            }
+        }
+    }
+
+    if contexts.is_empty() && fn_sigs.is_empty() {
+        return None;
+    }
+
+    let scope_ctx: Option<&str> = contexts.iter().find_map(|c| {
+        let trimmed = c.trim_start_matches("pub ");
+        let trimmed = trimmed.trim_start_matches("pub(crate) ");
+        if trimmed.starts_with("impl ")
+            || trimmed.starts_with("trait ")
+            || trimmed.starts_with("mod ")
+        {
+            Some(c.as_str())
+        } else {
+            None
+        }
+    });
+
+    let fn_in_header = contexts.iter().any(|c| {
+        let trimmed = c.trim_start_matches("pub ");
+        let trimmed = trimmed.trim_start_matches("pub(crate) ");
+        let trimmed = trimmed.trim_start_matches("async ");
+        let trimmed = trimmed.trim_start_matches("unsafe ");
+        let trimmed = trimmed.trim_start_matches("const ");
+        trimmed.starts_with("fn ")
+    });
+    if fn_in_header {
+        return None;
+    }
+
+    match (scope_ctx, fn_sigs.is_empty()) {
+        (Some(scope), false) => {
+            let scope_clean = scope.trim_end_matches(" {").trim_end_matches('{');
+            let fns = fn_sigs.join(", ");
+            Some(format!("{} > {}", scope_clean.trim(), fns))
+        }
+        (None, false) => Some(fn_sigs.join(", ")),
+        _ => None,
+    }
+}
+
+/// Read the source file at `repo_path/file_path` and walk backward from
+/// `line_number` (1-indexed) to find the nearest enclosing `fn` definition.
+fn find_enclosing_fn_from_source(
+    repo_path: &Path,
+    file_path: &str,
+    line_number: usize,
+) -> Option<String> {
+    let full_path = repo_path.join(file_path);
+    let content = std::fs::read_to_string(&full_path).ok()?;
+    let lines: Vec<&str> = content.lines().collect();
+
+    let start = line_number.saturating_sub(1).min(lines.len());
+    for i in (0..start).rev() {
+        if let Some(sig) = extract_fn_signature(lines[i].trim()) {
+            return Some(sig);
+        }
+    }
+    None
+}
+
+/// Find the start and end line numbers of the function enclosing `line_number`.
+///
+/// Reads the source file at `repo_path/file_path`, walks backward from
+/// `line_number` (1-indexed) to find the `fn` definition, then walks forward
+/// counting braces (skipping comments and string literals) to find the closing
+/// `}`.  Returns `(fn_start, fn_end)` both 1-indexed inclusive, or `None` if
+/// no enclosing function can be determined.
+pub fn find_function_boundaries(
+    repo_path: &Path,
+    file_path: &str,
+    line_number: usize,
+) -> Option<(usize, usize)> {
+    if line_number == 0 {
+        return None;
+    }
+
+    let full_path = repo_path.join(file_path);
+    let content = std::fs::read_to_string(&full_path).ok()?;
+    let lines: Vec<&str> = content.lines().collect();
+
+    if line_number > lines.len() {
+        return None;
+    }
+
+    let start_idx = line_number - 1;
+    let mut fn_line_idx: Option<usize> = None;
+    for i in (0..=start_idx).rev() {
+        if extract_fn_signature(lines[i].trim()).is_some() {
+            fn_line_idx = Some(i);
+            break;
+        }
+    }
+    let fn_line_idx = fn_line_idx?;
+
+    let mut brace_count: i32 = 0;
+    let mut found_open = false;
+    let mut in_block_comment = false;
+    let mut end_line_idx: Option<usize> = None;
+
+    for (i, line) in lines.iter().enumerate().skip(fn_line_idx) {
+        let mut chars = line.chars().peekable();
+        let mut in_string = false;
+
+        while let Some(ch) = chars.next() {
+            if in_block_comment {
+                if ch == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    in_block_comment = false;
+                }
+                continue;
+            }
+
+            if in_string {
+                if ch == '\\' {
+                    chars.next();
+                } else if ch == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+
+            if ch == '/' {
+                if chars.peek() == Some(&'/') {
+                    break; // line comment — skip rest of line
+                }
+                if chars.peek() == Some(&'*') {
+                    chars.next();
+                    in_block_comment = true;
+                    continue;
+                }
+            }
+
+            if ch == '"' {
+                in_string = true;
+                continue;
+            }
+
+            if ch == '{' {
+                brace_count += 1;
+                found_open = true;
+            } else if ch == '}' {
+                brace_count -= 1;
+            }
+
+            if found_open && brace_count == 0 {
+                end_line_idx = Some(i);
+                break;
+            }
+        }
+
+        if end_line_idx.is_some() {
+            break;
+        }
+    }
+
+    let end_line_idx = end_line_idx?;
+
+    Some((fn_line_idx + 1, end_line_idx + 1))
+}
+
+/// Takes the original diff for a file and returns an expanded diff showing
+/// the full enclosing function body around the changed hunks.
+pub fn generate_expanded_diff(
+    repo_path: &Path,
+    file_path: &str,
+    original_diff: &str,
+    merge_base: &str,
+) -> Option<String> {
+    let (_header, hunks) = parse_hunks_from_section(original_diff);
+    if hunks.is_empty() {
+        return None;
+    }
+
+    let first_hunk = &hunks[0];
+    let (fn_start, fn_end) = find_function_boundaries(repo_path, file_path, first_hunk.new_start)?;
+
+    let last_hunk = &hunks[hunks.len() - 1];
+    let last_hunk_end = last_hunk.new_start + last_hunk.new_count.saturating_sub(1);
+
+    let context_before = first_hunk.new_start.saturating_sub(fn_start);
+    let context_after = fn_end.saturating_sub(last_hunk_end);
+    let context = context_before.max(context_after) + 3;
+
+    let context_arg = format!("-U{context}");
+    let expanded_full = run_git(
+        repo_path,
+        &["diff", &context_arg, merge_base, "--", file_path],
+    )
+    .ok()?;
+
+    if expanded_full.is_empty() {
+        return None;
+    }
+
+    let file_refs = vec![(file_path.to_string(), Some((fn_start, fn_end)))];
+    let filtered = extract_diff_for_files(&expanded_full, &file_refs);
+
+    if filtered.is_empty() {
+        None
+    } else {
+        Some(filtered)
+    }
+}
+
+/// Extract a cleaned-up function signature from a source line.
+///
+/// Matches lines like `fn foo(`, `pub fn bar(`, `pub async fn baz(`,
+/// `pub(crate) const fn qux(`, etc.  Returns just `fn name` without
+/// parameters or body.
+fn extract_fn_signature(line: &str) -> Option<String> {
+    let mut rest = line;
+    loop {
+        if let Some(r) = rest.strip_prefix("pub(crate) ") {
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("pub ") {
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("async ") {
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("unsafe ") {
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("const ") {
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("extern \"C\" ") {
+            rest = r;
+        } else {
+            break;
+        }
+    }
+    if !rest.starts_with("fn ") {
+        return None;
+    }
+    let after_fn = &rest[3..];
+    let name_end = after_fn.find(['(', '<', ' ']).unwrap_or(after_fn.len());
+    let name = &after_fn[..name_end];
+    if name.is_empty() {
+        return None;
+    }
+    Some(format!("fn {name}"))
+}
+
 /// Extract the unified diff section(s) for the given file paths from a full
 /// multi-file unified diff string.  Returns a new unified diff containing only
 /// the matching file sections.
@@ -731,6 +1034,156 @@ mod tests {
         assert!(!sections[1].content.is_empty());
     }
 
+    #[test]
+    fn test_extract_function_context_impl_with_fn() {
+        let diff = "\
+diff --git a/src/services/task.rs b/src/services/task.rs
+--- a/src/services/task.rs
++++ b/src/services/task.rs
+@@ -826,6 +826,49 @@ impl TaskService {
++    pub async fn create_task(&self, input: CreateInput) -> Result<Task> {
++        let task = Task::new(input);
++        self.repo.save(&task).await
++    }
+";
+        let ctx = extract_function_context(diff, None);
+        assert_eq!(ctx, Some("impl TaskService > fn create_task".to_string()));
+    }
+
+    #[test]
+    fn test_extract_function_context_fn_in_header() {
+        let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -10,3 +10,4 @@ fn existing_function() {
+     let x = 1;
++    let y = 2;
+     x + 1
+";
+        let ctx = extract_function_context(diff, None);
+        assert_eq!(ctx, None);
+    }
+
+    #[test]
+    fn test_extract_function_context_no_context() {
+        let diff = "\
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,4 @@
+ use std::io;
++use std::fs;
+ use std::path;
+";
+        let ctx = extract_function_context(diff, None);
+        assert_eq!(ctx, None);
+    }
+
+    #[test]
+    fn test_extract_function_context_trait_with_fn() {
+        let diff = "\
+@@ -100,6 +100,10 @@ trait MyTrait {
++    fn required_method(&self) -> bool;
++
++    fn optional_method(&self) {}
+";
+        let ctx = extract_function_context(diff, None);
+        assert_eq!(
+            ctx,
+            Some("trait MyTrait > fn required_method, fn optional_method".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_function_context_multiple_hunks() {
+        let diff = "\
+@@ -10,3 +10,4 @@ impl Foo {
++    pub fn bar(&self) {}
+@@ -50,3 +51,4 @@ impl Foo {
++    fn baz(&self) {}
+";
+        let ctx = extract_function_context(diff, None);
+        assert_eq!(ctx, Some("impl Foo > fn bar, fn baz".to_string()));
+    }
+
+    #[test]
+    fn test_extract_function_context_mod_scope() {
+        let diff = "\
+@@ -5,6 +5,10 @@ mod helpers {
++    pub fn cleanup() {}
+";
+        let ctx = extract_function_context(diff, None);
+        assert_eq!(ctx, Some("mod helpers > fn cleanup".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fn_signature_variants() {
+        assert_eq!(extract_fn_signature("fn foo("), Some("fn foo".to_string()));
+        assert_eq!(
+            extract_fn_signature("pub fn bar()"),
+            Some("fn bar".to_string())
+        );
+        assert_eq!(
+            extract_fn_signature("pub async fn baz(x: i32)"),
+            Some("fn baz".to_string())
+        );
+        assert_eq!(
+            extract_fn_signature("pub(crate) const fn qux()"),
+            Some("fn qux".to_string())
+        );
+        assert_eq!(extract_fn_signature("let x = 1;"), None);
+        assert_eq!(extract_fn_signature("struct Foo {"), None);
+        assert_eq!(
+            extract_fn_signature("unsafe fn danger()"),
+            Some("fn danger".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_function_context_source_file_fallback() {
+        let dir = std::env::temp_dir().join("sherpa-test-fn-ctx");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("service.rs"),
+            "\
+use std::io;
+
+impl TaskService {
+    pub async fn sync_third_party_item(
+        &self,
+        executor: &mut Transaction<'_, Postgres>,
+    ) -> Result<()> {
+        let item = self.fetch_item().await?;
+        // line 9: some code
+        // line 10: more code
+        // line 11: even more
+    }
+}
+",
+        )
+        .unwrap();
+
+        let diff = "\
+diff --git a/service.rs b/service.rs
+--- a/service.rs
++++ b/service.rs
+@@ -9,3 +9,6 @@ impl TaskService {
+         // line 9: some code
++        if item.is_valid() {
++            self.process(&item).await?;
++        }
+         // line 10: more code
+";
+        let ctx = extract_function_context(diff, Some((&dir, "service.rs")));
+        assert_eq!(
+            ctx,
+            Some("impl TaskService > fn sync_third_party_item".to_string())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn make_temp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("sherpa-test-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -859,5 +1312,274 @@ mod tests {
 
         // Invalid
         assert_eq!(parse_hunk_header("not a hunk header"), (0, 0));
+    }
+
+    #[test]
+    fn test_find_function_boundaries_simple() {
+        let dir = make_temp_dir("fn-bounds-simple");
+        std::fs::write(
+            dir.join("simple.rs"),
+            "fn foo() {\n    let x = 1;\n    x + 1\n}\n",
+        )
+        .unwrap();
+        let result = find_function_boundaries(&dir, "simple.rs", 2);
+        assert_eq!(result, Some((1, 4)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_find_function_boundaries_nested_braces() {
+        let dir = make_temp_dir("fn-bounds-nested");
+        std::fs::write(
+            dir.join("nested.rs"),
+            "\
+fn complex() {
+    if true {
+        match x {
+            1 => {}
+            _ => {
+                let c = || { 42 };
+            }
+        }
+    }
+}
+",
+        )
+        .unwrap();
+        let result = find_function_boundaries(&dir, "nested.rs", 5);
+        assert_eq!(result, Some((1, 10)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_find_function_boundaries_comments() {
+        let dir = make_temp_dir("fn-bounds-comments");
+        std::fs::write(
+            dir.join("comments.rs"),
+            "\
+fn with_comments() {
+    // { this brace in comment should be ignored
+    let x = 1;
+    /* { block comment with brace } */
+    x + 1
+}
+",
+        )
+        .unwrap();
+        let result = find_function_boundaries(&dir, "comments.rs", 3);
+        assert_eq!(result, Some((1, 6)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_find_function_boundaries_string_literals() {
+        let dir = make_temp_dir("fn-bounds-strings");
+        std::fs::write(
+            dir.join("strings.rs"),
+            "\
+fn with_strings() {
+    let a = \"{ not a brace }\";
+    let b = \"escaped \\\" quote { still string }\";
+    println!(\"{{}}\");
+}
+",
+        )
+        .unwrap();
+        let result = find_function_boundaries(&dir, "strings.rs", 2);
+        assert_eq!(result, Some((1, 5)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_find_function_boundaries_line_before_any_fn() {
+        let dir = make_temp_dir("fn-bounds-before");
+        std::fs::write(
+            dir.join("before.rs"),
+            "use std::io;\n\nfn foo() {\n    1\n}\n",
+        )
+        .unwrap();
+        let result = find_function_boundaries(&dir, "before.rs", 1);
+        assert_eq!(result, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_find_function_boundaries_line_beyond_file() {
+        let dir = make_temp_dir("fn-bounds-beyond");
+        std::fs::write(dir.join("short.rs"), "fn foo() {}\n").unwrap();
+        assert_eq!(find_function_boundaries(&dir, "short.rs", 0), None);
+        assert_eq!(find_function_boundaries(&dir, "short.rs", 100), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_find_function_boundaries_pub_async_multiline_sig() {
+        let dir = make_temp_dir("fn-bounds-async");
+        std::fs::write(
+            dir.join("async_fn.rs"),
+            "\
+use std::io;
+
+pub async fn long_signature(
+    param1: String,
+    param2: i32,
+) -> Result<()> {
+    let x = param1;
+    let y = param2;
+    Ok(())
+}
+",
+        )
+        .unwrap();
+        let result = find_function_boundaries(&dir, "async_fn.rs", 7);
+        assert_eq!(result, Some((3, 10)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn make_git_repo(name: &str) -> std::path::PathBuf {
+        let dir = make_temp_dir(name);
+        run_git(&dir, &["init"]).unwrap();
+        run_git(&dir, &["config", "user.email", "test@test.com"]).unwrap();
+        run_git(&dir, &["config", "user.name", "Test"]).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_generate_expanded_diff_includes_function_context() {
+        let dir = make_git_repo("expand-diff");
+
+        let original = "\
+use std::io;
+
+fn helper() {
+    println!(\"helper\");
+}
+
+fn target_function() {
+    let line1 = 1;
+    let line2 = 2;
+    let line3 = 3;
+    let line4 = 4;
+    let line5 = 5;
+    let line6 = 6;
+    let line7 = 7;
+    let line8 = 8;
+    let line9 = 9;
+    let line10 = 10;
+}
+
+fn another() {
+    println!(\"another\");
+}
+";
+        std::fs::write(dir.join("code.rs"), original).unwrap();
+        run_git(&dir, &["add", "."]).unwrap();
+        run_git(&dir, &["commit", "-m", "initial"]).unwrap();
+
+        let merge_base = run_git(&dir, &["rev-parse", "HEAD"]).unwrap();
+
+        let modified = original.replace(
+            "    let line5 = 5;",
+            "    let line5 = 5;\n    let inserted = true;",
+        );
+        std::fs::write(dir.join("code.rs"), modified).unwrap();
+
+        let small_diff = run_git(&dir, &["diff", "-U1", &merge_base, "--", "code.rs"]).unwrap();
+
+        let file_section = {
+            let sections = split_diff_by_file(&small_diff);
+            sections
+                .into_iter()
+                .find(|s| s.path == "code.rs")
+                .map(|s| s.content)
+                .unwrap_or_default()
+        };
+
+        let result = generate_expanded_diff(&dir, "code.rs", &file_section, &merge_base);
+        assert!(result.is_some(), "should return expanded diff");
+        let expanded = result.unwrap();
+
+        assert!(
+            expanded.contains("target_function"),
+            "expanded diff should contain function name context"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_generate_expanded_diff_includes_lines_after_hunk() {
+        let dir = make_git_repo("expand-diff-after");
+
+        let original = "\
+fn big_function() {
+    let a = 1;
+    let b = 2;
+    let c = 3;
+    let d = 4;
+    let e = 5;
+    let f = 6;
+    let g = 7;
+    let h = 8;
+    let i = 9;
+    let j = 10;
+}
+";
+        std::fs::write(dir.join("code.rs"), original).unwrap();
+        run_git(&dir, &["add", "."]).unwrap();
+        run_git(&dir, &["commit", "-m", "initial"]).unwrap();
+
+        let merge_base = run_git(&dir, &["rev-parse", "HEAD"]).unwrap();
+
+        let modified = original.replace("    let b = 2;", "    let b = 999;");
+        std::fs::write(dir.join("code.rs"), modified).unwrap();
+
+        let small_diff = run_git(&dir, &["diff", "-U0", &merge_base, "--", "code.rs"]).unwrap();
+
+        let file_section = {
+            let sections = split_diff_by_file(&small_diff);
+            sections
+                .into_iter()
+                .find(|s| s.path == "code.rs")
+                .map(|s| s.content)
+                .unwrap_or_default()
+        };
+
+        let result = generate_expanded_diff(&dir, "code.rs", &file_section, &merge_base);
+        assert!(result.is_some());
+        let expanded = result.unwrap();
+
+        assert!(
+            expanded.contains("let j = 10"),
+            "expanded diff should include lines after the hunk within the function"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_generate_expanded_diff_returns_none_for_missing_file() {
+        let dir = make_git_repo("expand-diff-none");
+
+        let original = "fn foo() {}\n";
+        std::fs::write(dir.join("code.rs"), original).unwrap();
+        run_git(&dir, &["add", "."]).unwrap();
+        run_git(&dir, &["commit", "-m", "initial"]).unwrap();
+
+        let merge_base = run_git(&dir, &["rev-parse", "HEAD"]).unwrap();
+
+        let fake_diff = "\
+diff --git a/missing.rs b/missing.rs
+--- a/missing.rs
++++ b/missing.rs
+@@ -1,3 +1,4 @@
+ fn foo() {
++    let x = 1;
+ }
+";
+        let result = generate_expanded_diff(&dir, "missing.rs", fake_diff, &merge_base);
+        assert!(result.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

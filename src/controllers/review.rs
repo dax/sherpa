@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use axum::Form;
 use loco_rs::prelude::*;
@@ -849,6 +849,13 @@ fn resolve_file_diff(
     git_analysis::extract_diff_for_files(source, &refs)
 }
 
+fn build_file_label(path: &str, diff_lines: Option<(usize, usize)>) -> String {
+    match diff_lines {
+        Some((s, e)) => format!("{path} (L{s}-{e})"),
+        None => path.to_string(),
+    }
+}
+
 #[debug_handler]
 async fn step_page(
     ViewEngine(v): ViewEngine<TeraView>,
@@ -889,14 +896,15 @@ async fn step_page(
             let diff = resolve_file_diff(&session.diff, step, &f.path, f.diff_lines);
             let vkey = f.validation_key();
             let validated = step_validation.is_file_validated(&vkey);
-            let label = match f.diff_lines {
-                Some((start, end)) => format!("{} (L{}-{})", f.path, start, end),
-                None => f.path.clone(),
-            };
+            let repo = std::path::Path::new(&session.repo_path);
+            let source_info = Some((repo, f.path.as_str()));
+            let fn_context = git_analysis::extract_function_context(&diff, source_info);
+            let label = build_file_label(&f.path, f.diff_lines);
             serde_json::json!({
                 "path": f.path,
                 "validation_key": vkey,
                 "label": label,
+                "fn_context": fn_context,
                 "diff": diff,
                 "validated": validated,
             })
@@ -1598,11 +1606,12 @@ async fn step_validate_file(
     let file_actual_path = matched_ref
         .map(|f| f.path.clone())
         .unwrap_or_else(|| form.file_path.clone());
+    let repo = std::path::Path::new(&session.repo_path);
+    let fn_context = matched_ref.and_then(|f| {
+        git_analysis::extract_function_context(&file_diff, Some((repo, f.path.as_str())))
+    });
     let file_label = matched_ref
-        .map(|f| match f.diff_lines {
-            Some((s, e)) => format!("{} (L{}-{})", f.path, s, e),
-            None => f.path.clone(),
-        })
+        .map(|f| build_file_label(&f.path, f.diff_lines))
         .unwrap_or_else(|| form.file_path.clone());
 
     let validated_step_count = plan
@@ -1620,6 +1629,7 @@ async fn step_validate_file(
             "file_path": form.file_path,
             "file_actual_path": file_actual_path,
             "file_label": file_label,
+            "fn_context": fn_context,
             "file_diff": file_diff,
             "file_index": file_index,
             "step_number": step_number,
@@ -1691,11 +1701,12 @@ async fn step_unvalidate_file(
     let file_actual_path = matched_ref
         .map(|f| f.path.clone())
         .unwrap_or_else(|| form.file_path.clone());
+    let repo = std::path::Path::new(&session.repo_path);
+    let fn_context = matched_ref.and_then(|f| {
+        git_analysis::extract_function_context(&file_diff, Some((repo, f.path.as_str())))
+    });
     let file_label = matched_ref
-        .map(|f| match f.diff_lines {
-            Some((s, e)) => format!("{} (L{}-{})", f.path, s, e),
-            None => f.path.clone(),
-        })
+        .map(|f| build_file_label(&f.path, f.diff_lines))
         .unwrap_or_else(|| form.file_path.clone());
 
     let validated_step_count = plan
@@ -1713,6 +1724,7 @@ async fn step_unvalidate_file(
             "file_path": form.file_path,
             "file_actual_path": file_actual_path,
             "file_label": file_label,
+            "fn_context": fn_context,
             "file_diff": file_diff,
             "file_index": file_index,
             "step_number": step_number,
@@ -1801,6 +1813,77 @@ async fn step_section_skip(
     )
 }
 
+#[derive(Deserialize)]
+pub struct ExpandFnQuery {
+    file: String,
+    #[serde(rename = "hunk_start")]
+    _hunk_start: usize,
+}
+
+#[debug_handler]
+async fn step_expand_fn(
+    ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
+    Path((session_id, step_number)): Path<(String, usize)>,
+    Query(query): Query<ExpandFnQuery>,
+) -> Result<Response> {
+    let (_model, session) = load_session_from_db(&ctx.db, &session_id).await?;
+
+    let plan = session.review_plan.as_ref().ok_or(Error::NotFound)?;
+    if step_number < 1 || step_number > plan.steps.len() {
+        return Err(Error::NotFound);
+    }
+
+    let step = &plan.steps[step_number - 1];
+
+    let diff_lines = step
+        .file_refs
+        .iter()
+        .find(|f| f.path == query.file)
+        .and_then(|f| f.diff_lines);
+
+    let original_diff = resolve_file_diff(&session.diff, step, &query.file, diff_lines);
+
+    let file_section = {
+        let sections = git_analysis::split_diff_by_file(&original_diff);
+        sections
+            .into_iter()
+            .find(|s| s.path == query.file)
+            .map(|s| s.content)
+            .unwrap_or_default()
+    };
+
+    let repo_path = std::path::Path::new(&session.repo_path);
+
+    let expanded = git_analysis::generate_expanded_diff(
+        repo_path,
+        &query.file,
+        &file_section,
+        &session.merge_base,
+    );
+
+    match expanded {
+        Some(expanded_diff) => format::render().view(
+            &v,
+            "review/_file_expanded.html",
+            data!({
+                "expanded_diff": expanded_diff,
+                "original_diff": original_diff,
+                "file_path": query.file,
+            }),
+        ),
+        None => format::render().view(
+            &v,
+            "review/_file_expanded.html",
+            data!({
+                "expanded_diff": original_diff,
+                "original_diff": original_diff,
+                "file_path": query.file,
+            }),
+        ),
+    }
+}
+
 #[debug_handler]
 async fn retry_analysis(
     State(ctx): State<AppContext>,
@@ -1864,6 +1947,10 @@ pub fn page_routes() -> Routes {
         .add(
             "/{session_id}/guide/step/{step_number}/request-revision",
             post(step_request_revision),
+        )
+        .add(
+            "/{session_id}/guide/step/{step_number}/expand-fn",
+            get(step_expand_fn),
         )
         .add(
             "/{session_id}/guide/step/{step_number}/skip/{section}",
