@@ -64,9 +64,9 @@ Then register it with your AI tool:
 
 **Claude Code:**
 ```sh
-claude mcp add --transport stdio --scope user \
-  --env SHERPA_URL=http://localhost:5150 \
-  sherpa -- /path/to/sherpa/target/debug/sherpa-mcp
+claude mcp add sherpa --transport stdio --scope user \
+  -e SHERPA_URL=http://localhost:5150 \
+  -- /path/to/sherpa/target/debug/sherpa-mcp
 ```
 
 **OpenCode** — add to `opencode.json`:
@@ -133,9 +133,9 @@ Environment variable:
 Add the MCP server using the CLI:
 
 ```sh
-claude mcp add --transport stdio --scope user \
-  --env SHERPA_URL=http://localhost:5150 \
-  sherpa -- ~/Dev/sherpa/target/debug/sherpa-mcp
+claude mcp add sherpa --transport stdio --scope user \
+  -e SHERPA_URL=http://localhost:5150 \
+  -- ~/Dev/sherpa/target/debug/sherpa-mcp
 ```
 
 Or add it to `.mcp.json` in a project to share with your team:
