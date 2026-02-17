@@ -1,10 +1,10 @@
 # Sherpa — AI-Guided Code Review Tool
 
-Sherpa pairs you with an AI guide to review code changes on any local Git branch. Point it at a repository, and Sherpa analyzes the current branch's diff against its merge base — then walks you through a step-by-step guided review with AI-generated explanations, change grouping, and an interactive chat. Sherpa also supports **Review While Building**, where AI coding agents push completed implementation steps for review in real-time while they continue working.
+Sherpa pairs you with an AI guide to review code changes — on a local Git branch or a **GitHub Pull Request**. Point it at a repository (or paste a PR URL), and Sherpa analyzes the diff — then walks you through a step-by-step guided review with AI-generated explanations, change grouping, and an interactive chat. Sherpa also supports **Review While Building**, where AI coding agents push completed implementation steps for review in real-time while they continue working.
 
 ## What Sherpa Does
 
-1. **Analyzes your branch** — detects merge base, extracts diff, counts changed files and lines
+1. **Analyzes your branch or PR** — detects merge base, extracts diff, counts changed files and lines (works with local Git branches and GitHub Pull Requests)
 2. **AI summarizes the changes** — generates an implementation approach overview with key decisions and concerns
 3. **Groups changes into review steps** — the AI decides how to organize the diff (by feature, layer, concept — not just file-by-file)
 4. **Guides you through each step** — shows the diff (rendered with diff2html), an AI explanation, and how each step relates to the previous one
@@ -17,6 +17,7 @@ Sherpa pairs you with an AI guide to review code changes on any local Git branch
 - [devbox](https://www.jetify.com/devbox/) — declarative developer environment (manages Rust, Node.js, and all tooling)
 - [direnv](https://direnv.net/) — automatic environment loading (optional but recommended)
 - **An AI CLI tool** — either [opencode](https://github.com/opencode-ai/opencode) or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and accessible in your PATH
+- **GitHub CLI** (`gh`) — required only for reviewing GitHub Pull Requests (install from [cli.github.com](https://cli.github.com/))
 
 ## Getting Started
 
@@ -34,7 +35,7 @@ just dev
 Open **http://localhost:5150** and follow the on-screen flow:
 
 1. **Set up AI backend** (`/cli/setup`) — select `opencode` or `claude`, pick models for deep/fast analysis
-2. **Point to a repo** (`/repo/analyze`) — enter the path to a local Git repository (must be on a feature branch, not main/master)
+2. **Point to a repo or PR** (`/repo/analyze`) — enter a local Git repository path (must be on a feature branch) or paste a GitHub PR URL
 3. **Wait for analysis** — Sherpa runs background AI calls to generate approach, review plan, and step explanations
 4. **Review** — walk through each step, validate changes, chat with the AI
 
@@ -50,13 +51,42 @@ deep_model = "opus"         # model for complex analysis (optional)
 fast_model = "sonnet"       # model for quick tasks (optional)
 ```
 
+### MCP Server Quick Start
+
+To let AI coding agents (Claude Code, OpenCode) use Sherpa's review-while-building workflow, add the MCP server:
+
+```sh
+# Build the MCP server binary
+cargo build --bin sherpa-mcp
+```
+
+Then register it with your AI tool:
+
+**Claude Code:**
+```sh
+claude mcp add --transport stdio --scope user \
+  --env SHERPA_URL=http://localhost:5150 \
+  sherpa -- /path/to/sherpa/target/debug/sherpa-mcp
+```
+
+**OpenCode** — add to `opencode.json`:
+```json
+{
+  "mcp": {
+    "sherpa": {
+      "type": "local",
+      "command": ["/path/to/sherpa/target/debug/sherpa-mcp"],
+      "environment": { "SHERPA_URL": "http://localhost:5150" }
+    }
+  }
+}
+```
+
+See [Review While Building](#review-while-building) for the full setup and workflow details.
+
 ### Review State
 
-Review progress is automatically saved to:
-- **SQLite database** — `sherpa_dev.sqlite` in the project root
-- **JSON files** — `~/.sherpa/sessions/{id}.json` and `{repo}/.sherpa/review-{branch}.json`
-
-If you close Sherpa and come back, it will detect the existing review and offer to resume where you left off.
+Review progress is automatically saved to the **SQLite database** (`sherpa_dev.sqlite` in the project root). If you close Sherpa and come back, it will detect the existing review and offer to resume where you left off.
 
 ## Review While Building
 
@@ -260,8 +290,9 @@ cargo fmt --check               # Formatting
 │   │   ├── cli_detection.rs        # CLI availability detection
 │   │   ├── config.rs       # ~/.sherpa/config.toml management
 │   │   ├── git_analysis.rs # Git operations (merge-base, diff)
+│   │   ├── github_pr.rs    # GitHub PR analysis (via gh CLI)
 │   │   ├── markdown.rs     # Markdown -> HTML
-│   │   └── review_session.rs       # Session struct + file persistence + live mode
+│   │   └── review_session.rs       # Session struct + live mode
 │   └── views/              # Response structs
 ├── tasks/                  # PRD and task definitions
 ├── tests/requests/         # Integration tests

@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Sherpa** is a single-user local tool that pairs a developer reviewing code changes (branch diffs) with an AI guide. The developer points Sherpa at a local Git repository, and Sherpa analyzes the current branch's changes against its merge base. An AI (via `opencode` or `claude` CLI) provides a project summary, change analysis, and step-by-step guided review. The developer walks through each step, chatting with the AI, and validates changes as they go. Review progress is persisted to disk.
+**Sherpa** is a single-user local tool that pairs a developer reviewing code changes (branch diffs or GitHub PRs) with an AI guide. The developer points Sherpa at a local Git repository or pastes a GitHub PR URL, and Sherpa analyzes the changes. An AI (via `opencode` or `claude` CLI) provides a project summary, change analysis, and step-by-step guided review. The developer walks through each step, chatting with the AI, and validates changes as they go. Review progress is persisted to SQLite.
 
 ## Tech Stack
 
@@ -11,6 +11,7 @@
 - **Database**: SQLite (via SeaORM with auto-migration)
 - **Diff rendering**: diff2html (client-side JS)
 - **AI backends**: `opencode` CLI or `claude` CLI (user-selectable)
+- **GitHub PR analysis**: via `gh` CLI (GitHub CLI)
 - **Dev environment**: devbox + just + prek
 - **Formatter**: rustfmt (`max_width = 100`)
 - **CSS build**: Tailwind CSS v4 via `@tailwindcss/cli`, FlyonUI JS copied from node_modules
@@ -46,8 +47,9 @@ src/
 │   ├── cli_detection.rs    # Detect available AI CLIs (opencode/claude), list models
 │   ├── config.rs           # SherpaConfig (TOML at ~/.sherpa/config.toml)
 │   ├── git_analysis.rs     # Git operations (merge-base, diff, changed files)
+│   ├── github_pr.rs        # GitHub PR analysis (via gh CLI)
 │   ├── markdown.rs         # Markdown -> HTML conversion (pulldown-cmark)
-│   └── review_session.rs   # ReviewSession struct, persistence, review plan, file-based storage
+│   └── review_session.rs   # ReviewSession struct, persistence, review plan, live mode
 ├── models/                 # SeaORM models (DB layer)
 │   ├── review_sessions.rs  # Review session DB operations
 │   ├── ai_analyses.rs      # Cached AI analysis results + failure tracking
@@ -92,7 +94,7 @@ assets/views/
 2. **Repo Analysis** (`/repo/analyze`): User submits repo path -> git analysis -> ReviewSession created -> background AI analyses spawned -> redirect to loading page
 3. **Loading** (`/review/{id}/loading`): Polls `/review/{id}/status` via HTMX every 2s -> redirects to summary when ready
 4. **Summary** (`/review/{id}/summary`): Shows AI-generated approach + metrics + chat -> user clicks "Start Review"
-5. **Guide Start** (`/review/{id}/guide/start`): AI generates review plan (JSON with steps) -> saved to DB + file
+5. **Guide Start** (`/review/{id}/guide/start`): AI generates review plan (JSON with steps) -> saved to DB
 6. **Step Review** (`/review/{id}/guide/step/{n}`): Shows diff (via diff2html), AI explanation, relation to previous step, step-scoped chat
 7. **Validation** (`/review/{id}/guide/step/{n}/validate`): Marks step validated -> advances to next -> redirects to summary when all done
 
@@ -119,11 +121,7 @@ Three tables (SQLite, auto-migrated):
 
 ### State Persistence
 
-Review state is saved in two places:
-1. **SQLite DB** -- primary storage for all session data
-2. **File system** -- `~/.sherpa/sessions/{id}.json` + `{repo}/.sherpa/review-{branch}.json` (for resume detection)
-
-Both are updated on every mutation (step validation, chat message, plan generation).
+Review state is saved to the **SQLite database** (primary and only storage for all session data). Updated on every mutation (step validation, chat message, plan generation).
 
 ## Route Reference
 
@@ -253,6 +251,18 @@ process-compose restart server -p ${PROCESS_COMPOSE_PORT:-9999}
 - New model? Add to `src/models/mod.rs` and create migration in `migration/src/`
 - New template? Place in `assets/views/{controller_name}/`
 - Static assets? Place in `assets/static/` (served at `/static/`)
+
+### Documentation Maintenance
+
+After every code change, check whether `README.md` or `AGENTS.md` need updating:
+
+- **New route, controller, or service?** → Update the route table, source layout, and architecture sections in both files
+- **Changed data flow or persistence?** → Update the "Key Data Flow" and "State Persistence" sections
+- **New dependency or tool?** → Update the "Tech Stack" table and "Prerequisites" in README.md
+- **Changed CLI commands or config?** → Update "Getting Started", "Configuration", and "Development Commands" sections
+- **New MCP tool or API endpoint?** → Update the MCP and Agent HTTP API sections in README.md
+
+**Rule**: If your change would make existing documentation inaccurate, update the docs in the same commit.
 
 ## Landing the Plane (Session Completion)
 
