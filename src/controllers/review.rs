@@ -1576,12 +1576,24 @@ async fn step_validate_file(
         StepStatus::Reviewed => "Reviewed",
         StepStatus::NeedsRevision => "NeedsRevision",
     };
+    let file_index = step
+        .file_refs
+        .iter()
+        .position(|f| f.path == form.file_path)
+        .unwrap_or(0);
     let file_diff = step
         .file_refs
         .iter()
         .find(|f| f.path == form.file_path)
         .map(|f| resolve_file_diff(&session.diff, step, &f.path, f.diff_lines))
         .unwrap_or_default();
+
+    let validated_step_count = plan
+        .steps
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| session.is_step_validated(*i))
+        .count();
 
     format::render().view(
         &v,
@@ -1590,10 +1602,94 @@ async fn step_validate_file(
             "session_id": session_id,
             "file_path": form.file_path,
             "file_diff": file_diff,
+            "file_index": file_index,
             "step_number": step_number,
+            "step_title": step.title,
             "total_steps": total_steps,
             "current_step_validated": current_step_validated,
             "validated_file_count": validated_file_count,
+            "validated_step_count": validated_step_count,
+            "total_file_count": total_file_count,
+            "is_live": is_live,
+            "step_status": step_status,
+        }),
+    )
+}
+
+#[debug_handler]
+async fn step_unvalidate_file(
+    ViewEngine(v): ViewEngine<TeraView>,
+    State(ctx): State<AppContext>,
+    Path((session_id, step_number)): Path<(String, usize)>,
+    Form(form): Form<ValidateFileForm>,
+) -> Result<Response> {
+    let (_model, mut session) = load_session_from_db(&ctx.db, &session_id).await?;
+
+    let plan = match &session.review_plan {
+        Some(p) => p.clone(),
+        None => return Err(Error::NotFound),
+    };
+    let total_steps = plan.steps.len();
+    if step_number < 1 || step_number > total_steps {
+        return Err(Error::NotFound);
+    }
+
+    session.ensure_validated_steps_size();
+    session.validated_steps[step_number - 1].unvalidate_file(&form.file_path);
+
+    review_sessions::update_validated_steps(&ctx.db, &session_id, &session.validated_steps)
+        .await
+        .map_err(|e| {
+            tracing::error!("DB error saving validated steps: {e}");
+            Error::InternalServerError
+        })?;
+
+    let current_step_validated = session.is_step_validated(step_number - 1);
+    let sv = &session.validated_steps[step_number - 1];
+    let validated_file_count = sv.validated_count();
+    let total_file_count = plan.steps[step_number - 1].file_refs.len();
+    let is_live = session.is_live();
+
+    let step = &plan.steps[step_number - 1];
+    let step_status = match step.status {
+        StepStatus::Planned => "Planned",
+        StepStatus::ReadyForReview => "ReadyForReview",
+        StepStatus::Reviewed => "Reviewed",
+        StepStatus::NeedsRevision => "NeedsRevision",
+    };
+    let file_index = step
+        .file_refs
+        .iter()
+        .position(|f| f.path == form.file_path)
+        .unwrap_or(0);
+    let file_diff = step
+        .file_refs
+        .iter()
+        .find(|f| f.path == form.file_path)
+        .map(|f| resolve_file_diff(&session.diff, step, &f.path, f.diff_lines))
+        .unwrap_or_default();
+
+    let validated_step_count = plan
+        .steps
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| session.is_step_validated(*i))
+        .count();
+
+    format::render().view(
+        &v,
+        "review/_file_unvalidated.html",
+        data!({
+            "session_id": session_id,
+            "file_path": form.file_path,
+            "file_diff": file_diff,
+            "file_index": file_index,
+            "step_number": step_number,
+            "step_title": step.title,
+            "total_steps": total_steps,
+            "current_step_validated": current_step_validated,
+            "validated_file_count": validated_file_count,
+            "validated_step_count": validated_step_count,
             "total_file_count": total_file_count,
             "is_live": is_live,
             "step_status": step_status,
@@ -1729,6 +1825,10 @@ pub fn page_routes() -> Routes {
         .add(
             "/{session_id}/guide/step/{step_number}/validate-file",
             post(step_validate_file),
+        )
+        .add(
+            "/{session_id}/guide/step/{step_number}/unvalidate-file",
+            post(step_unvalidate_file),
         )
         .add(
             "/{session_id}/guide/step/{step_number}/request-revision",

@@ -1,0 +1,53 @@
+{# OOB swap: sidebar progress bars (desktop + mobile) #}
+<div id="sidebar-progress-desktop" hx-swap-oob="true" class="flex items-center gap-2 mt-3">
+    <div class="flex-1 bg-base-300 rounded-full h-1.5">
+        <div class="bg-success rounded-full h-1.5 transition-all duration-500"
+             style="width: {% if total_steps > 0 %}{{ validated_file_count * 100 / total_steps }}{% else %}0{% endif %}%">
+        </div>
+    </div>
+    <span class="text-xs text-base-content/50">{{ validated_step_count }}/{{ total_steps }}</span>
+</div>
+<div id="sidebar-progress-mobile" hx-swap-oob="true" class="flex items-center gap-2 px-2 mb-3">
+    <div class="flex-1 bg-base-300 rounded-full h-1.5">
+        <div class="bg-success rounded-full h-1.5 transition-all duration-500"
+             style="width: {% if total_steps > 0 %}{{ validated_step_count * 100 / total_steps }}{% else %}0{% endif %}%">
+        </div>
+    </div>
+    <span class="text-xs text-base-content/50">{{ validated_step_count }}/{{ total_steps }}</span>
+</div>
+
+{# OOB swap: current step entry in both sidebars #}
+<a id="sidebar-step-desktop-{{ step_number }}" hx-swap-oob="true" href="/review/{{ session_id }}/guide/step/{{ step_number }}"
+   class="step-item step-item--active">
+    <span class="font-mono text-xs text-base-content/50 w-5 shrink-0 text-center mt-0.5">{{ step_number }}</span>
+    <div class="flex-1 min-w-0">
+        <div class="text-sm flex items-center gap-1.5">
+            {% if current_step_validated %}
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 text-success shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+            </svg>
+            {% endif %}
+            <span class="truncate">{{ step_title }}</span>
+        </div>
+        <div class="text-xs text-base-content/40 mt-0.5">
+            {{ total_file_count }} file{% if total_file_count != 1 %}s{% endif %}
+        </div>
+    </div>
+</a>
+<a id="sidebar-step-mobile-{{ step_number }}" hx-swap-oob="true" href="/review/{{ session_id }}/guide/step/{{ step_number }}"
+   class="step-item step-item--active">
+    <span class="font-mono text-xs text-base-content/50 w-5 shrink-0 text-center mt-0.5">{{ step_number }}</span>
+    <div class="flex-1 min-w-0">
+        <div class="text-sm flex items-center gap-1.5">
+            {% if current_step_validated %}
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 text-success shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+            </svg>
+            {% endif %}
+            <span class="truncate">{{ step_title }}</span>
+        </div>
+        <div class="text-xs text-base-content/40 mt-0.5">
+            {{ total_file_count }} file{% if total_file_count != 1 %}s{% endif %}
+        </div>
+    </div>
+</a>

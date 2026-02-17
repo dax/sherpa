@@ -1,21 +1,16 @@
-<details id="file-{{ file_index }}" class="bg-base-200 rounded-lg group opacity-60">
+<details id="file-{{ file_index }}" class="bg-base-200 rounded-lg group" open>
     <summary class="flex items-center gap-2 px-2 sm:px-4 py-2 cursor-pointer select-none font-medium">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0 transition-transform group-open:rotate-90" viewBox="0 0 20 20" fill="currentColor">
             <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
         </svg>
         <span class="font-mono text-xs sm:text-sm truncate min-w-0">{{ file_path }}</span>
-        <form hx-post="/review/{{ session_id }}/guide/step/{{ step_number }}/unvalidate-file"
+        <form hx-post="/review/{{ session_id }}/guide/step/{{ step_number }}/validate-file"
               hx-target="#file-{{ file_index }}"
               hx-swap="outerHTML"
-              class="ml-auto flex items-center gap-1"
+              class="ml-auto"
               onclick="event.stopPropagation()">
             <input type="hidden" name="file_path" value="{{ file_path }}" />
-            <span class="badge badge-success badge-xs">✓ Validated</span>
-            <button type="submit" class="btn btn-ghost btn-xs text-base-content/40 hover:text-error" title="Unvalidate">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
-                    <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
-                </svg>
-            </button>
+            <button type="submit" class="btn btn-success btn-xs">Validate</button>
         </form>
     </summary>
     <div class="px-2 sm:px-4 pb-3 overflow-x-auto">
@@ -74,7 +69,6 @@
                 drawFileList: false, matching: 'lines',
                 outputFormat: 'line-by-line', colorScheme: 'dark'
             });
-            // Re-initialize line selection and chat annotations on the swapped-in diff
             if (window.sherpa && window.sherpa.initLineSelection) {
                 window.sherpa.initLineSelection(el);
             }

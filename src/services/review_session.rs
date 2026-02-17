@@ -103,6 +103,10 @@ impl StepValidation {
         self.files.insert(path.to_string(), true);
     }
 
+    pub fn unvalidate_file(&mut self, path: &str) {
+        self.files.insert(path.to_string(), false);
+    }
+
     pub fn is_file_validated(&self, path: &str) -> bool {
         self.files.get(path).copied().unwrap_or(false)
     }
@@ -688,6 +692,12 @@ mod tests {
         sv.validate_file("b.rs");
         assert!(sv.is_step_validated(&["a.rs".to_string(), "b.rs".to_string(),]));
         assert_eq!(sv.validated_count(), 2);
+
+        sv.unvalidate_file("a.rs");
+        assert!(!sv.is_file_validated("a.rs"));
+        assert!(sv.is_file_validated("b.rs"));
+        assert_eq!(sv.validated_count(), 1);
+        assert!(!sv.is_step_validated(&["a.rs".to_string(), "b.rs".to_string(),]));
     }
 
     #[test]

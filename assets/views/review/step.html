@@ -54,7 +54,7 @@
     <div class="drawer-body p-2">
         {% set_global validated_count = 0 %}
         {% for s in steps %}{% if s.validated %}{% set_global validated_count = validated_count + 1 %}{% endif %}{% endfor %}
-        <div class="flex items-center gap-2 px-2 mb-3">
+        <div id="sidebar-progress-mobile" class="flex items-center gap-2 px-2 mb-3">
             <div class="flex-1 bg-base-300 rounded-full h-1.5">
                 <div class="bg-success rounded-full h-1.5 transition-all duration-500"
                      style="width: {% if total_steps > 0 %}{{ validated_count * 100 / total_steps }}{% else %}0{% endif %}%">
@@ -73,7 +73,7 @@
                 </div>
             </div>
             {% else %}
-            <a href="/review/{{ session_id }}/guide/step/{{ step.number }}"
+            <a id="sidebar-step-mobile-{{ step.number }}" href="/review/{{ session_id }}/guide/step/{{ step.number }}"
                class="step-item {% if step.active %}step-item--active{% elif step.validated %}step-item--validated{% endif %}">
                 <span class="font-mono text-xs text-base-content/50 w-5 shrink-0 text-center mt-0.5">{{ step.number }}</span>
                 <div class="flex-1 min-w-0">
@@ -101,7 +101,7 @@
     <aside class="w-80 bg-base-100 border-r border-base-300 flex-col shrink-0 hidden md:flex">
         <div class="p-4 border-b border-base-300">
             <h2 class="text-lg font-bold">Review Plan</h2>
-            <div class="flex items-center gap-2 mt-3">
+            <div id="sidebar-progress-desktop" class="flex items-center gap-2 mt-3">
                 <div class="flex-1 bg-base-300 rounded-full h-1.5">
                     <div class="bg-success rounded-full h-1.5 transition-all duration-500"
                          style="width: {% if total_steps > 0 %}{{ validated_count * 100 / total_steps }}{% else %}0{% endif %}%">
@@ -127,7 +127,7 @@
                 </div>
             </div>
             {% else %}
-            <a href="/review/{{ session_id }}/guide/step/{{ step.number }}"
+            <a id="sidebar-step-desktop-{{ step.number }}" href="/review/{{ session_id }}/guide/step/{{ step.number }}"
                class="step-item {% if step.active %}step-item--active{% elif step.validated %}step-item--validated{% endif %}">
                 <span class="font-mono text-xs text-base-content/50 w-5 shrink-0 text-center mt-0.5">{{ step.number }}</span>
                 <div class="flex-1 min-w-0">
@@ -187,7 +187,19 @@
                                     </svg>
                                     <span class="font-mono text-xs sm:text-sm truncate min-w-0">{{ fd.path }}</span>
                                     {% if fd.validated %}
-                                    <span class="badge badge-success badge-xs ml-auto">✓ Validated</span>
+                                    <form hx-post="/review/{{ session_id }}/guide/step/{{ step_number }}/unvalidate-file"
+                                          hx-target="#file-{{ loop.index0 }}"
+                                          hx-swap="outerHTML"
+                                          class="ml-auto flex items-center gap-1"
+                                          onclick="event.stopPropagation()">
+                                        <input type="hidden" name="file_path" value="{{ fd.path }}" />
+                                        <span class="badge badge-success badge-xs">✓ Validated</span>
+                                        <button type="submit" class="btn btn-ghost btn-xs text-base-content/40 hover:text-error" title="Unvalidate">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                            </svg>
+                                        </button>
+                                    </form>
                                     {% else %}
                                     <form hx-post="/review/{{ session_id }}/guide/step/{{ step_number }}/validate-file"
                                           hx-target="#file-{{ loop.index0 }}"
