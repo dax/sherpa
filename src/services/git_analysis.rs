@@ -182,11 +182,33 @@ pub fn extract_diff_for_files(
                     let start_idx = start.saturating_sub(1);
                     let end_idx = (*end).min(lines.len());
                     if start_idx < end_idx {
-                        if !result.is_empty() {
+                        let slice = lines[start_idx..end_idx].join("\n");
+                        // If the slice doesn't start with "diff --git", it's
+                        // missing the file header that diff renderers (e.g.
+                        // diff2html) need.  This typically happens when the AI
+                        // provides source-file line numbers instead of
+                        // diff-section-internal line numbers.  Fall back to the
+                        // full section so the diff is still renderable.
+                        if !slice.starts_with("diff --git") {
+                            tracing::warn!(
+                                "diff_lines [{start}, {end}] produced a slice \
+                                 without diff header for {path} — using full \
+                                 section"
+                            );
+                            if !result.is_empty() {
+                                result.push('\n');
+                            }
+                            result.push_str(&section.content);
+                            if !section.content.ends_with('\n') {
+                                result.push('\n');
+                            }
+                        } else {
+                            if !result.is_empty() {
+                                result.push('\n');
+                            }
+                            result.push_str(&slice);
                             result.push('\n');
                         }
-                        result.push_str(&lines[start_idx..end_idx].join("\n"));
-                        result.push('\n');
                     } else {
                         // diff_lines out of range (e.g. AI used source file line
                         // numbers instead of diff-section-internal lines) — fall
@@ -586,6 +608,20 @@ mod tests {
         assert!(
             result.contains("diff --git a/src/lib.rs"),
             "should fall back to full section when diff_lines are out of range"
+        );
+        assert!(result.contains("+use crate::new;"));
+    }
+
+    #[test]
+    fn test_extract_diff_with_mid_section_lines_falls_back_to_full_section() {
+        // diff_lines that skip the "diff --git" header (e.g. AI used source
+        // file line numbers) should fall back to the full section so
+        // diff2html can render it.
+        let refs = vec![("src/lib.rs".to_string(), Some((3, 5)))];
+        let result = extract_diff_for_files(multi_file_diff(), &refs);
+        assert!(
+            result.contains("diff --git a/src/lib.rs"),
+            "should fall back to full section when slice lacks diff header"
         );
         assert!(result.contains("+use crate::new;"));
     }
