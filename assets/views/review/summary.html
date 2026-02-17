@@ -24,7 +24,7 @@
     </div>
 
     {% if all_validated %}
-    <div class="alert alert-success shadow-lg mb-6">
+    <div class="alert alert-success shadow-lg mb-6 flex items-center gap-2">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 shrink-0" viewBox="0 0 20 20" fill="currentColor">
             <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
         </svg>
@@ -74,15 +74,14 @@
             <h2 class="card-title text-lg mb-4">Reviewed Changes</h2>
             <div class="space-y-2">
                 {% for step in reviewed_steps %}
-                <div class="collapse collapse-arrow bg-base-200 rounded-lg">
-                    <input type="checkbox" />
-                    <div class="collapse-title font-medium flex items-center gap-2">
+                <details class="collapse collapse-arrow bg-base-200 rounded-lg">
+                    <summary class="collapse-title font-medium flex items-center gap-2">
                         <span class="badge badge-success badge-sm font-mono">{{ step.number }}</span>
                         {{ step.title }}
                         <span class="text-xs text-base-content/50 ml-auto mr-4">
                             {{ step.files | length }} file{% if step.files | length != 1 %}s{% endif %}
                         </span>
-                    </div>
+                    </summary>
                     <div class="collapse-content">
                         <div class="space-y-3 pt-2">
                             <div class="flex flex-wrap gap-2">
@@ -124,7 +123,7 @@
                             {% endif %}
                         </div>
                     </div>
-                </div>
+                </details>
                 {% endfor %}
             </div>
         </div>
