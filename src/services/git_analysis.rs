@@ -160,13 +160,115 @@ fn count_commits(path: &Path, range: &str) -> Result<usize, GitAnalysisError> {
         })
 }
 
+/// Parsed hunk from a unified diff section.
+struct ParsedHunk {
+    /// 1-indexed start line in the new file (+ side)
+    new_start: usize,
+    /// Number of lines in the new file for this hunk
+    new_count: usize,
+    /// The raw lines of this hunk (starting with the @@ header, ending before the next @@ or EOF)
+    lines: Vec<String>,
+}
+
+/// Parse a single file's diff section into its header and individual hunks.
+///
+/// Returns `(header, hunks)` where `header` is everything before the first `@@`
+/// line (the `diff --git`, `index`, `---`, `+++` lines) and `hunks` contains
+/// each parsed hunk with its new-file range metadata.
+fn parse_hunks_from_section(section: &str) -> (String, Vec<ParsedHunk>) {
+    let mut header_lines: Vec<&str> = Vec::new();
+    let mut hunks: Vec<ParsedHunk> = Vec::new();
+    let mut current_hunk_lines: Vec<String> = Vec::new();
+    let mut current_new_start: usize = 0;
+    let mut current_new_count: usize = 0;
+    let mut in_hunk = false;
+
+    for line in section.lines() {
+        if line.starts_with("@@ ") {
+            // Flush previous hunk if any
+            if in_hunk {
+                hunks.push(ParsedHunk {
+                    new_start: current_new_start,
+                    new_count: current_new_count,
+                    lines: current_hunk_lines.clone(),
+                });
+                current_hunk_lines.clear();
+            }
+
+            // Parse @@ -old_start[,old_count] +new_start[,new_count] @@
+            let (new_start, new_count) = parse_hunk_header(line);
+            current_new_start = new_start;
+            current_new_count = new_count;
+            current_hunk_lines.push(line.to_string());
+            in_hunk = true;
+        } else if in_hunk {
+            current_hunk_lines.push(line.to_string());
+        } else {
+            header_lines.push(line);
+        }
+    }
+
+    // Flush last hunk
+    if in_hunk {
+        hunks.push(ParsedHunk {
+            new_start: current_new_start,
+            new_count: current_new_count,
+            lines: current_hunk_lines,
+        });
+    }
+
+    let header = if header_lines.is_empty() {
+        String::new()
+    } else {
+        header_lines.join("\n") + "\n"
+    };
+
+    (header, hunks)
+}
+
+/// Parse a `@@ ... @@` hunk header and return `(new_start, new_count)`.
+///
+/// Handles formats like:
+/// - `@@ -10,5 +10,8 @@` → (10, 8)
+/// - `@@ -1 +1 @@` → (1, 1)  (count omitted means 1)
+/// - `@@ -0,0 +1,5 @@` → (1, 5)
+fn parse_hunk_header(line: &str) -> (usize, usize) {
+    let default = (0, 0);
+
+    let rest = match line.strip_prefix("@@ -") {
+        Some(r) => r,
+        None => return default,
+    };
+
+    let rest2 = match rest.split_once(" +") {
+        Some((_, r)) => r,
+        None => return default,
+    };
+
+    let new_part = match rest2.split_once(" @@") {
+        Some((np, _)) => np,
+        None => return default,
+    };
+
+    if let Some((start_str, count_str)) = new_part.split_once(',') {
+        let start = start_str.parse::<usize>().unwrap_or(0);
+        let count = count_str.parse::<usize>().unwrap_or(0);
+        (start, count)
+    } else {
+        let start = new_part.parse::<usize>().unwrap_or(0);
+        (start, 1)
+    }
+}
+
 /// Extract the unified diff section(s) for the given file paths from a full
 /// multi-file unified diff string.  Returns a new unified diff containing only
 /// the matching file sections.
 ///
-/// If `diff_lines` is `Some((start, end))`, the returned diff for that file is
-/// further narrowed to lines `start..=end` (1-indexed within that file's diff
-/// section, including headers).  If `None`, the entire file section is included.
+/// If `diff_lines` is `Some((start, end))`, the returned diff includes only
+/// hunks that overlap with new-file source lines `start..=end` (1-indexed).
+/// Whole hunks are always included — never trimmed mid-hunk.
+/// Falls back to the full section if no hunks overlap.
+/// If `None`, the entire file section is included.
 pub fn extract_diff_for_files(
     full_diff: &str,
     file_refs: &[(String, Option<(usize, usize)>)],
@@ -176,67 +278,47 @@ pub fn extract_diff_for_files(
 
     for (path, diff_lines) in file_refs {
         if let Some(section) = sections.iter().find(|s| s.path == *path) {
-            match diff_lines {
+            let filtered = match diff_lines {
                 Some((start, end)) => {
-                    let lines: Vec<&str> = section.content.lines().collect();
-                    let start_idx = start.saturating_sub(1);
-                    let end_idx = (*end).min(lines.len());
-                    if start_idx < end_idx {
-                        let slice = lines[start_idx..end_idx].join("\n");
-                        // If the slice doesn't start with "diff --git", it's
-                        // missing the file header that diff renderers (e.g.
-                        // diff2html) need.  This typically happens when the AI
-                        // provides source-file line numbers instead of
-                        // diff-section-internal line numbers.  Fall back to the
-                        // full section so the diff is still renderable.
-                        if !slice.starts_with("diff --git") {
-                            tracing::warn!(
-                                "diff_lines [{start}, {end}] produced a slice \
-                                 without diff header for {path} — using full \
-                                 section"
-                            );
-                            if !result.is_empty() {
-                                result.push('\n');
+                    let (header, hunks) = parse_hunks_from_section(&section.content);
+
+                    let matching: Vec<&ParsedHunk> = hunks
+                        .iter()
+                        .filter(|h| {
+                            if h.new_count == 0 {
+                                return false;
                             }
-                            result.push_str(&section.content);
-                            if !section.content.ends_with('\n') {
-                                result.push('\n');
-                            }
-                        } else {
-                            if !result.is_empty() {
-                                result.push('\n');
-                            }
-                            result.push_str(&slice);
-                            result.push('\n');
-                        }
-                    } else {
-                        // diff_lines out of range (e.g. AI used source file line
-                        // numbers instead of diff-section-internal lines) — fall
-                        // back to the entire file section rather than returning
-                        // an empty diff.
+                            let hunk_end = h.new_start + h.new_count.max(1) - 1;
+                            h.new_start <= *end && hunk_end >= *start
+                        })
+                        .collect();
+
+                    if matching.is_empty() {
                         tracing::warn!(
-                            "diff_lines [{start}, {end}] out of range for \
-                             {path} (section has {} lines) — using full section",
-                            lines.len()
+                            "diff_lines [{start}, {end}] matched no \
+                             hunks for {path} — using full section"
                         );
-                        if !result.is_empty() {
-                            result.push('\n');
+                        section.content.clone()
+                    } else {
+                        let mut out = header;
+                        for hunk in matching {
+                            for line in &hunk.lines {
+                                out.push_str(line);
+                                out.push('\n');
+                            }
                         }
-                        result.push_str(&section.content);
-                        if !section.content.ends_with('\n') {
-                            result.push('\n');
-                        }
+                        out
                     }
                 }
-                None => {
-                    if !result.is_empty() {
-                        result.push('\n');
-                    }
-                    result.push_str(&section.content);
-                    if !section.content.ends_with('\n') {
-                        result.push('\n');
-                    }
-                }
+                None => section.content.clone(),
+            };
+
+            if !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str(&filtered);
+            if !filtered.ends_with('\n') {
+                result.push('\n');
             }
         }
     }
@@ -563,11 +645,13 @@ mod tests {
 
     #[test]
     fn test_extract_diff_with_line_range() {
+        // Source lines 1-3 overlap with hunk @@ -1,3 +1,4 @@ (new lines 1-4)
+        // so the whole hunk is included
         let refs = vec![("src/lib.rs".to_string(), Some((1, 3)))];
         let result = extract_diff_for_files(multi_file_diff(), &refs);
         assert!(result.contains("diff --git a/src/lib.rs"));
         assert!(result.contains("--- a/src/lib.rs"));
-        assert!(!result.contains("+use crate::new;"));
+        assert!(result.contains("+use crate::new;"));
     }
 
     #[test]
@@ -613,16 +697,12 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_diff_with_mid_section_lines_falls_back_to_full_section() {
-        // diff_lines that skip the "diff --git" header (e.g. AI used source
-        // file line numbers) should fall back to the full section so
-        // diff2html can render it.
+    fn test_extract_diff_with_overlapping_source_lines() {
+        // Source lines 3-5 overlap with hunk @@ -1,3 +1,4 @@ (new lines 1-4)
+        // so the whole hunk is included via hunk-based filtering
         let refs = vec![("src/lib.rs".to_string(), Some((3, 5)))];
         let result = extract_diff_for_files(multi_file_diff(), &refs);
-        assert!(
-            result.contains("diff --git a/src/lib.rs"),
-            "should fall back to full section when slice lacks diff header"
-        );
+        assert!(result.contains("diff --git a/src/lib.rs"));
         assert!(result.contains("+use crate::new;"));
     }
 
@@ -698,5 +778,86 @@ mod tests {
         std::fs::write(dir.join("binary.bin"), &[0u8, 159, 146, 150]).unwrap();
         assert!(generate_untracked_diff(&dir, "binary.bin").is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn multi_hunk_diff() -> &'static str {
+        "diff --git a/src/app.rs b/src/app.rs\n\
+         index abc1234..def5678 100644\n\
+         --- a/src/app.rs\n\
+         +++ b/src/app.rs\n\
+         @@ -8,6 +8,8 @@\n\
+         context line 8\n\
+         context line 9\n\
+         +added line 10\n\
+         +added line 11\n\
+         context line 12\n\
+         context line 13\n\
+         @@ -48,6 +50,8 @@\n\
+         context line 50\n\
+         context line 51\n\
+         +added line 52\n\
+         +added line 53\n\
+         context line 54\n\
+         context line 55\n"
+    }
+
+    #[test]
+    fn test_extract_hunks_with_range_filter() {
+        // Range 50-60 overlaps only hunk2 (@@ -48,6 +50,8 @@, new lines 50-57)
+        let refs = vec![("src/app.rs".to_string(), Some((50, 60)))];
+        let result = extract_diff_for_files(multi_hunk_diff(), &refs);
+        assert!(result.contains("diff --git a/src/app.rs"));
+        assert!(result.contains("@@ -48,6 +50,8 @@"));
+        assert!(result.contains("+added line 52"));
+        assert!(!result.contains("@@ -8,6 +8,8 @@"));
+        assert!(!result.contains("+added line 10"));
+    }
+
+    #[test]
+    fn test_extract_hunks_overlapping_range() {
+        // Range 10-55 overlaps both hunks
+        let refs = vec![("src/app.rs".to_string(), Some((10, 55)))];
+        let result = extract_diff_for_files(multi_hunk_diff(), &refs);
+        assert!(result.contains("@@ -8,6 +8,8 @@"));
+        assert!(result.contains("@@ -48,6 +50,8 @@"));
+        assert!(result.contains("+added line 10"));
+        assert!(result.contains("+added line 52"));
+    }
+
+    #[test]
+    fn test_extract_hunks_no_match_falls_back() {
+        // Range 200-300 matches no hunks — should fall back to full section
+        let refs = vec![("src/app.rs".to_string(), Some((200, 300)))];
+        let result = extract_diff_for_files(multi_hunk_diff(), &refs);
+        assert!(result.contains("@@ -8,6 +8,8 @@"));
+        assert!(result.contains("@@ -48,6 +50,8 @@"));
+    }
+
+    #[test]
+    fn test_extract_hunks_none_returns_full() {
+        let refs = vec![("src/app.rs".to_string(), None)];
+        let result = extract_diff_for_files(multi_hunk_diff(), &refs);
+        assert!(result.contains("@@ -8,6 +8,8 @@"));
+        assert!(result.contains("@@ -48,6 +50,8 @@"));
+        assert!(result.contains("+added line 10"));
+        assert!(result.contains("+added line 52"));
+    }
+
+    #[test]
+    fn test_parse_hunk_header_edge_cases() {
+        // No count (means 1)
+        assert_eq!(parse_hunk_header("@@ -1 +1 @@"), (1, 1));
+
+        // New file
+        assert_eq!(parse_hunk_header("@@ -0,0 +1,5 @@"), (1, 5));
+
+        // Normal
+        assert_eq!(parse_hunk_header("@@ -10,5 +10,8 @@"), (10, 8));
+
+        // With trailing context after @@
+        assert_eq!(parse_hunk_header("@@ -10,5 +10,8 @@ fn main()"), (10, 8));
+
+        // Invalid
+        assert_eq!(parse_hunk_header("not a hunk header"), (0, 0));
     }
 }

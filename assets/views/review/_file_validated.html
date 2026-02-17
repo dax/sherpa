@@ -3,7 +3,7 @@
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0 transition-transform group-open:rotate-90" viewBox="0 0 20 20" fill="currentColor">
             <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
         </svg>
-        <span class="font-mono text-xs sm:text-sm truncate min-w-0">{{ file_path }}</span>
+        <span class="font-mono text-xs sm:text-sm truncate min-w-0">{{ file_label | default(value=file_path) }}</span>
         <form hx-post="/review/{{ session_id }}/guide/step/{{ step_number }}/unvalidate-file"
               hx-target="#file-{{ file_index }}"
               hx-swap="outerHTML"
@@ -19,7 +19,7 @@
         </form>
     </summary>
     <div class="px-2 sm:px-4 pb-3 overflow-x-auto">
-        <div class="diff-file-container" data-diff="{{ file_diff | json_encode() }}" data-file-path="{{ file_path }}"></div>
+        <div class="diff-file-container" data-diff="{{ file_diff | json_encode() }}" data-file-path="{{ file_actual_path | default(value=file_path) }}"></div>
     </div>
 </details>
 

@@ -798,7 +798,7 @@ async fn validation_state_persists_across_loads() {
         let mut sv1 = StepValidation::default();
         sv1.validate_file("src/lib.rs");
         let mut sv2 = StepValidation::default();
-        sv2.validate_file("src/new.rs");
+        sv2.validate_file("src/new.rs:[1,10]");
         session.validated_steps = vec![sv1, sv2];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
@@ -861,7 +861,7 @@ async fn summary_page_shows_review_complete_banner() {
         let mut sv1 = StepValidation::default();
         sv1.validate_file("src/lib.rs");
         let mut sv2 = StepValidation::default();
-        sv2.validate_file("src/new.rs");
+        sv2.validate_file("src/new.rs:[1,10]");
         session.validated_steps = vec![sv1, sv2];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
@@ -893,7 +893,7 @@ async fn summary_page_shows_reviewed_changes_section() {
         let mut sv1 = StepValidation::default();
         sv1.validate_file("src/lib.rs");
         let mut sv2 = StepValidation::default();
-        sv2.validate_file("src/new.rs");
+        sv2.validate_file("src/new.rs:[1,10]");
         session.validated_steps = vec![sv1, sv2];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
@@ -931,7 +931,7 @@ async fn summary_page_hides_start_review_when_complete() {
         let mut sv1 = StepValidation::default();
         sv1.validate_file("src/lib.rs");
         let mut sv2 = StepValidation::default();
-        sv2.validate_file("src/new.rs");
+        sv2.validate_file("src/new.rs:[1,10]");
         session.validated_steps = vec![sv1, sv2];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
@@ -994,7 +994,7 @@ async fn summary_page_shows_step_chat_messages() {
         let mut sv1 = StepValidation::default();
         sv1.validate_file("src/lib.rs");
         let mut sv2 = StepValidation::default();
-        sv2.validate_file("src/new.rs");
+        sv2.validate_file("src/new.rs:[1,10]");
         session.validated_steps = vec![sv1, sv2];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
@@ -1079,7 +1079,7 @@ async fn resume_endpoint_redirects_to_guide_when_all_validated() {
         let mut sv1 = StepValidation::default();
         sv1.validate_file("src/lib.rs");
         let mut sv2 = StepValidation::default();
-        sv2.validate_file("src/new.rs");
+        sv2.validate_file("src/new.rs:[1,10]");
         session.validated_steps = vec![sv1, sv2];
         sync_session_to_db(&ctx.db, &session).await;
         let session_id = session.id.clone();
@@ -1298,7 +1298,7 @@ async fn first_unvalidated_step_returns_correct_step() {
     let mut sv1 = StepValidation::default();
     sv1.validate_file("src/lib.rs");
     let mut sv2 = StepValidation::default();
-    sv2.validate_file("src/new.rs");
+    sv2.validate_file("src/new.rs:[1,10]");
     session.validated_steps = vec![sv1, sv2];
     assert_eq!(session.first_unvalidated_step(), None);
 

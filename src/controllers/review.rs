@@ -887,9 +887,16 @@ async fn step_page(
         .iter()
         .map(|f| {
             let diff = resolve_file_diff(&session.diff, step, &f.path, f.diff_lines);
-            let validated = step_validation.is_file_validated(&f.path);
+            let vkey = f.validation_key();
+            let validated = step_validation.is_file_validated(&vkey);
+            let label = match f.diff_lines {
+                Some((start, end)) => format!("{} (L{}-{})", f.path, start, end),
+                None => f.path.clone(),
+            };
             serde_json::json!({
                 "path": f.path,
+                "validation_key": vkey,
+                "label": label,
                 "diff": diff,
                 "validated": validated,
             })
@@ -1579,14 +1586,24 @@ async fn step_validate_file(
     let file_index = step
         .file_refs
         .iter()
-        .position(|f| f.path == form.file_path)
+        .position(|f| f.validation_key() == form.file_path)
         .unwrap_or(0);
-    let file_diff = step
+    let matched_ref = step
         .file_refs
         .iter()
-        .find(|f| f.path == form.file_path)
+        .find(|f| f.validation_key() == form.file_path);
+    let file_diff = matched_ref
         .map(|f| resolve_file_diff(&session.diff, step, &f.path, f.diff_lines))
         .unwrap_or_default();
+    let file_actual_path = matched_ref
+        .map(|f| f.path.clone())
+        .unwrap_or_else(|| form.file_path.clone());
+    let file_label = matched_ref
+        .map(|f| match f.diff_lines {
+            Some((s, e)) => format!("{} (L{}-{})", f.path, s, e),
+            None => f.path.clone(),
+        })
+        .unwrap_or_else(|| form.file_path.clone());
 
     let validated_step_count = plan
         .steps
@@ -1601,6 +1618,8 @@ async fn step_validate_file(
         data!({
             "session_id": session_id,
             "file_path": form.file_path,
+            "file_actual_path": file_actual_path,
+            "file_label": file_label,
             "file_diff": file_diff,
             "file_index": file_index,
             "step_number": step_number,
@@ -1660,14 +1679,24 @@ async fn step_unvalidate_file(
     let file_index = step
         .file_refs
         .iter()
-        .position(|f| f.path == form.file_path)
+        .position(|f| f.validation_key() == form.file_path)
         .unwrap_or(0);
-    let file_diff = step
+    let matched_ref = step
         .file_refs
         .iter()
-        .find(|f| f.path == form.file_path)
+        .find(|f| f.validation_key() == form.file_path);
+    let file_diff = matched_ref
         .map(|f| resolve_file_diff(&session.diff, step, &f.path, f.diff_lines))
         .unwrap_or_default();
+    let file_actual_path = matched_ref
+        .map(|f| f.path.clone())
+        .unwrap_or_else(|| form.file_path.clone());
+    let file_label = matched_ref
+        .map(|f| match f.diff_lines {
+            Some((s, e)) => format!("{} (L{}-{})", f.path, s, e),
+            None => f.path.clone(),
+        })
+        .unwrap_or_else(|| form.file_path.clone());
 
     let validated_step_count = plan
         .steps
@@ -1682,6 +1711,8 @@ async fn step_unvalidate_file(
         data!({
             "session_id": session_id,
             "file_path": form.file_path,
+            "file_actual_path": file_actual_path,
+            "file_label": file_label,
             "file_diff": file_diff,
             "file_index": file_index,
             "step_number": step_number,
@@ -1717,7 +1748,7 @@ async fn step_validate(
 
     let step = &plan.steps[step_number - 1];
     for file_ref in &step.file_refs {
-        session.validated_steps[step_number - 1].validate_file(&file_ref.path);
+        session.validated_steps[step_number - 1].validate_file(&file_ref.validation_key());
     }
 
     review_sessions::update_validated_steps(&ctx.db, &session_id, &session.validated_steps)

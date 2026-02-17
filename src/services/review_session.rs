@@ -76,10 +76,23 @@ pub struct StepAiData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileRef {
     pub path: String,
-    /// Optional line range within the per-file diff segment (start, end).
-    /// Refers to 1-indexed line numbers in the unified diff output for this file.
+    /// Optional source-file line range in the new version (start, end).
+    /// Refers to 1-indexed line numbers in the new file (the + side of the diff).
+    /// When set, only diff hunks overlapping this range are shown.
     /// None means "entire file's diff."
     pub diff_lines: Option<(usize, usize)>,
+}
+
+impl FileRef {
+    /// Returns the composite key used in `StepValidation`.
+    /// - No range: `"src/foo.rs"`
+    /// - With range: `"src/foo.rs:[163,208]"`
+    pub fn validation_key(&self) -> String {
+        match self.diff_lines {
+            Some((start, end)) => format!("{}:[{},{}]", self.path, start, end),
+            None => self.path.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -109,6 +122,22 @@ impl StepValidation {
 
     pub fn is_file_validated(&self, path: &str) -> bool {
         self.files.get(path).copied().unwrap_or(false)
+    }
+
+    pub fn validate_by_path(&mut self, path: &str) {
+        for (key, validated) in self.files.iter_mut() {
+            if key == path || key.starts_with(&format!("{path}:[")) {
+                *validated = true;
+            }
+        }
+    }
+
+    pub fn unvalidate_by_path(&mut self, path: &str) {
+        for (key, validated) in self.files.iter_mut() {
+            if key == path || key.starts_with(&format!("{path}:[")) {
+                *validated = false;
+            }
+        }
     }
 
     pub fn ensure_files(&mut self, paths: &[String]) {
@@ -313,9 +342,8 @@ impl ReviewSession {
                     .resize(needed, StepValidation::default());
             }
             for (i, step) in plan.steps.iter().enumerate() {
-                let file_paths: Vec<String> =
-                    step.file_refs.iter().map(|f| f.path.clone()).collect();
-                self.validated_steps[i].ensure_files(&file_paths);
+                let keys: Vec<String> = step.file_refs.iter().map(|f| f.validation_key()).collect();
+                self.validated_steps[i].ensure_files(&keys);
             }
         }
     }
@@ -333,7 +361,7 @@ impl ReviewSession {
             Some(sv) => sv,
             None => return false,
         };
-        let expected: Vec<String> = step.file_refs.iter().map(|f| f.path.clone()).collect();
+        let expected: Vec<String> = step.file_refs.iter().map(|f| f.validation_key()).collect();
         sv.is_step_validated(&expected)
     }
 
@@ -774,5 +802,92 @@ mod tests {
         }"#;
         let session: ReviewSession = serde_json::from_str(json).unwrap();
         assert_eq!(session.block_agent, None);
+    }
+
+    #[test]
+    fn test_validation_key_no_range() {
+        let fr = FileRef {
+            path: "src/foo.rs".to_string(),
+            diff_lines: None,
+        };
+        assert_eq!(fr.validation_key(), "src/foo.rs");
+    }
+
+    #[test]
+    fn test_validation_key_with_range() {
+        let fr = FileRef {
+            path: "src/foo.rs".to_string(),
+            diff_lines: Some((163, 208)),
+        };
+        assert_eq!(fr.validation_key(), "src/foo.rs:[163,208]");
+    }
+
+    #[test]
+    fn test_validate_by_path() {
+        let mut sv = StepValidation::default();
+        sv.ensure_files(&[
+            "auth.py:[163,208]".to_string(),
+            "auth.py:[231,273]".to_string(),
+            "other.py".to_string(),
+        ]);
+        sv.validate_by_path("auth.py");
+        assert!(sv.is_file_validated("auth.py:[163,208]"));
+        assert!(sv.is_file_validated("auth.py:[231,273]"));
+        assert!(!sv.is_file_validated("other.py"));
+    }
+
+    #[test]
+    fn test_unvalidate_by_path() {
+        let mut sv = StepValidation::default();
+        sv.ensure_files(&[
+            "auth.py:[163,208]".to_string(),
+            "auth.py:[231,273]".to_string(),
+            "other.py".to_string(),
+        ]);
+        sv.validate_by_path("auth.py");
+        sv.validate_file("other.py");
+        assert!(sv.is_file_validated("auth.py:[163,208]"));
+        assert!(sv.is_file_validated("other.py"));
+
+        sv.unvalidate_by_path("auth.py");
+        assert!(!sv.is_file_validated("auth.py:[163,208]"));
+        assert!(!sv.is_file_validated("auth.py:[231,273]"));
+        assert!(sv.is_file_validated("other.py"));
+    }
+
+    #[test]
+    fn test_step_validation_with_range_keys() {
+        let mut session = ReviewSession::new(make_test_analysis());
+        session.review_plan = Some(ReviewPlan {
+            steps: vec![ReviewStep {
+                title: "Auth changes".to_string(),
+                rationale: "r".to_string(),
+                file_refs: vec![
+                    FileRef {
+                        path: "auth.py".to_string(),
+                        diff_lines: Some((163, 208)),
+                    },
+                    FileRef {
+                        path: "auth.py".to_string(),
+                        diff_lines: Some((231, 273)),
+                    },
+                ],
+                ai_data: StepAiData::default(),
+                status: StepStatus::default(),
+                step_diff: None,
+            }],
+            generated_at: "now".to_string(),
+        });
+        session.validated_steps = vec![StepValidation::default()];
+        session.ensure_validated_steps_size();
+
+        assert!(!session.is_step_validated(0));
+
+        session.validated_steps[0].validate_file("auth.py:[163,208]");
+        assert!(!session.is_step_validated(0));
+
+        session.validated_steps[0].validate_file("auth.py:[231,273]");
+        assert!(session.is_step_validated(0));
+        assert!(session.all_steps_validated());
     }
 }

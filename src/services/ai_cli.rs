@@ -167,10 +167,11 @@ pub fn review_plan_instruction() -> &'static str {
        ]\n\
      }\n\
      ```\n\
-     diff_lines references 1-indexed line numbers within the file's diff output \
-     (NOT source file line numbers). Line 1 is the 'diff --git ...' header. \
-     For example, if a file's diff section is 30 lines long, valid values are \
-     [1, 30]. Use null for the entire file's diff — prefer null unless you need \
+     diff_lines references 1-indexed line numbers in the NEW version of the \
+     source file (the + side of the diff). For example, if a function spans \
+     lines 163-208 in the new file, use [163, 208]. The system will \
+     automatically find and display the diff hunks that overlap this range. \
+     Use null for the entire file's diff — prefer null unless you need \
      to split a single file across multiple steps. Order steps in recommended \
      review sequence."
 }
