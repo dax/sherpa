@@ -1567,8 +1567,15 @@ async fn step_validate_file(
     let sv = &session.validated_steps[step_number - 1];
     let validated_file_count = sv.validated_count();
     let total_file_count = plan.steps[step_number - 1].file_refs.len();
+    let is_live = session.is_live();
 
     let step = &plan.steps[step_number - 1];
+    let step_status = match step.status {
+        StepStatus::Planned => "Planned",
+        StepStatus::ReadyForReview => "ReadyForReview",
+        StepStatus::Reviewed => "Reviewed",
+        StepStatus::NeedsRevision => "NeedsRevision",
+    };
     let file_diff = step
         .file_refs
         .iter()
@@ -1588,6 +1595,8 @@ async fn step_validate_file(
             "current_step_validated": current_step_validated,
             "validated_file_count": validated_file_count,
             "total_file_count": total_file_count,
+            "is_live": is_live,
+            "step_status": step_status,
         }),
     )
 }

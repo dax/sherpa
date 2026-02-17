@@ -308,6 +308,9 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // --- Expose helpers globally so HTMX-swapped partials can call them ---
+    window.sherpa = window.sherpa || {};
+
     // --- Diff rendering ---
     document.querySelectorAll('.diff-file-container').forEach(function(el) {
         var diffString = JSON.parse(el.getAttribute('data-diff'));
@@ -681,6 +684,11 @@ document.addEventListener('DOMContentLoaded', function() {
             clearAllSelections();
         }
     });
+
+    // Expose helpers for HTMX-swapped partials (e.g. _file_validated.html)
+    window.sherpa.initLineSelection = initLineSelection;
+    window.sherpa.annotateDiscussedLines = annotateDiscussedLines;
+    window.sherpa.initChatDiffLinks = initChatDiffLinks;
 });
 </script>
 {% endblock %}

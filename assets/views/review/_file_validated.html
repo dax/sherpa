@@ -1,19 +1,19 @@
 <details class="bg-base-200 rounded-lg group opacity-60">
-    <summary class="flex items-center gap-2 px-4 py-2 cursor-pointer select-none font-medium">
+    <summary class="flex items-center gap-2 px-2 sm:px-4 py-2 cursor-pointer select-none font-medium">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0 transition-transform group-open:rotate-90" viewBox="0 0 20 20" fill="currentColor">
             <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
         </svg>
-        <span class="font-mono text-sm">{{ file_path }}</span>
+        <span class="font-mono text-xs sm:text-sm truncate min-w-0">{{ file_path }}</span>
         <span class="badge badge-success badge-xs ml-auto">✓ Validated</span>
     </summary>
-    <div class="px-4 pb-3">
-        <div class="diff-file-container" data-diff="{{ file_diff | json_encode() }}"></div>
+    <div class="px-2 sm:px-4 pb-3 overflow-x-auto">
+        <div class="diff-file-container" data-diff="{{ file_diff | json_encode() }}" data-file-path="{{ file_path }}"></div>
     </div>
 </details>
 
 <span id="file-progress" hx-swap-oob="true">{{ validated_file_count }}/{{ total_file_count }}</span>
 
-<div id="step-nav" hx-swap-oob="true" class="flex gap-3 items-center">
+<div id="step-nav" hx-swap-oob="true" class="flex flex-wrap gap-2 sm:gap-3 items-center justify-end">
     {% if current_step_validated %}
     <span class="badge badge-success badge-lg gap-1">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -21,6 +21,20 @@
         </svg>
         All files validated
     </span>
+    {% endif %}
+
+    {% if is_live and step_status != "NeedsRevision" and step_status == "ReadyForReview" %}
+    <form method="post" action="/review/{{ session_id }}/guide/step/{{ step_number }}/request-revision" class="flex items-center gap-2">
+        <label class="label cursor-pointer gap-1 text-xs">
+            <input type="checkbox" name="block" value="true" class="checkbox checkbox-warning checkbox-xs" />
+            <span>Block agent</span>
+        </label>
+        <button type="submit" class="btn btn-warning">Request Revision</button>
+    </form>
+    {% endif %}
+
+    {% if step_status == "NeedsRevision" %}
+    <span class="badge badge-warning badge-lg gap-1 self-center">Needs Revision</span>
     {% endif %}
 
     {% if step_number < total_steps %}
@@ -46,6 +60,16 @@
                 drawFileList: false, matching: 'lines',
                 outputFormat: 'line-by-line', colorScheme: 'dark'
             });
+            // Re-initialize line selection and chat annotations on the swapped-in diff
+            if (window.sherpa && window.sherpa.initLineSelection) {
+                window.sherpa.initLineSelection(el);
+            }
+            if (window.sherpa && window.sherpa.initChatDiffLinks) {
+                window.sherpa.initChatDiffLinks();
+            }
+            if (window.sherpa && window.sherpa.annotateDiscussedLines) {
+                window.sherpa.annotateDiscussedLines();
+            }
         }
     }
 })();
