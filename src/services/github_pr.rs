@@ -164,6 +164,7 @@ pub fn analyze_pr(input: &str) -> Result<GitAnalysis, GithubPrError> {
         diff,
         changed_files,
         commit_count: metadata.commits.count,
+        has_uncommitted_changes: false,
     })
 }
 

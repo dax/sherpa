@@ -198,6 +198,8 @@ pub struct DiffMetrics {
     pub lines_added: usize,
     pub lines_removed: usize,
     pub commits_on_branch: usize,
+    #[serde(default)]
+    pub has_uncommitted_changes: bool,
 }
 
 impl ReviewSession {
@@ -229,6 +231,7 @@ impl ReviewSession {
             lines_added,
             lines_removed,
             commits_on_branch: analysis.commit_count,
+            has_uncommitted_changes: analysis.has_uncommitted_changes,
         };
 
         Self {
@@ -433,6 +436,7 @@ mod tests {
                 status: FileStatus::Modified,
             }],
             commit_count: 3,
+            has_uncommitted_changes: false,
         }
     }
 

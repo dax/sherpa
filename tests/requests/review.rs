@@ -29,6 +29,7 @@ fn make_test_session() -> ReviewSession {
             },
         ],
         commit_count: 5,
+        has_uncommitted_changes: false,
     };
     ReviewSession::new(analysis)
 }

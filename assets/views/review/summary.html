@@ -59,6 +59,9 @@
                     <div class="stat bg-base-200 rounded-lg p-4 stat-commits">
                         <div class="stat-title text-xs">Commits</div>
                         <div class="stat-value text-2xl">{{ metrics.commits_on_branch }}</div>
+                        {% if metrics.has_uncommitted_changes %}
+                        <div class="stat-desc text-warning text-xs">+ uncommitted changes</div>
+                        {% endif %}
                     </div>
                 </div>
             </div>

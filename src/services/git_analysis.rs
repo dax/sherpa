@@ -12,6 +12,7 @@ pub struct GitAnalysis {
     pub diff: String,
     pub changed_files: Vec<ChangedFile>,
     pub commit_count: usize,
+    pub has_uncommitted_changes: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -281,6 +282,42 @@ pub fn compute_diff_line_stats(diff: &str) -> (usize, usize) {
     (added, removed)
 }
 
+fn get_untracked_files(path: &Path) -> Result<Vec<String>, GitAnalysisError> {
+    let output = run_git(path, &["ls-files", "--others", "--exclude-standard"])?;
+    Ok(output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|l| l.to_string())
+        .collect())
+}
+
+fn generate_untracked_diff(repo_path: &Path, file_path: &str) -> Option<String> {
+    let full_path = repo_path.join(file_path);
+    let content = match std::fs::read_to_string(&full_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("Skipping untracked file {file_path}: {e}");
+            return None;
+        }
+    };
+    let lines: Vec<&str> = content.lines().collect();
+    let line_count = lines.len();
+    let mut diff = String::new();
+    diff.push_str(&format!("diff --git a/{file_path} b/{file_path}\n"));
+    diff.push_str("new file mode 100644\n");
+    diff.push_str("--- /dev/null\n");
+    diff.push_str(&format!("+++ b/{file_path}\n"));
+    if line_count > 0 {
+        diff.push_str(&format!("@@ -0,0 +1,{line_count} @@\n"));
+        for line in &lines {
+            diff.push('+');
+            diff.push_str(line);
+            diff.push('\n');
+        }
+    }
+    Some(diff)
+}
+
 pub fn analyze_repo(path: &Path) -> Result<GitAnalysis, GitAnalysisError> {
     let canonical = path
         .canonicalize()
@@ -307,25 +344,50 @@ pub fn analyze_repo(path: &Path) -> Result<GitAnalysis, GitAnalysisError> {
 
     let merge_base = run_git(&canonical, &["merge-base", "HEAD", &default_branch])?;
 
-    let diff_range = format!("{merge_base}..HEAD");
-    let diff = run_git(&canonical, &["diff", &diff_range])?;
+    // Diff working tree against merge_base to include uncommitted changes
+    let diff = run_git(&canonical, &["diff", &merge_base])?;
 
-    let name_status = run_git(&canonical, &["diff", "--name-status", &diff_range])?;
+    let name_status = run_git(&canonical, &["diff", "--name-status", &merge_base])?;
     let changed_files: Vec<ChangedFile> = name_status
         .lines()
         .filter_map(parse_name_status_line)
         .collect();
 
-    let commit_count = count_commits(&canonical, &diff_range)?;
+    // commit_count uses committed-only range (meaningful metric)
+    let commit_range = format!("{merge_base}..HEAD");
+    let commit_count = count_commits(&canonical, &commit_range)?;
+
+    let has_uncommitted = !run_git(&canonical, &["status", "--porcelain"])
+        .unwrap_or_default()
+        .is_empty();
+
+    // Append synthetic diffs for untracked (non-ignored) files
+    let untracked = get_untracked_files(&canonical).unwrap_or_default();
+    let mut full_diff = diff;
+    let mut all_changed_files = changed_files;
+
+    for file_path in &untracked {
+        if let Some(file_diff) = generate_untracked_diff(&canonical, file_path) {
+            if !full_diff.is_empty() && !full_diff.ends_with('\n') {
+                full_diff.push('\n');
+            }
+            full_diff.push_str(&file_diff);
+            all_changed_files.push(ChangedFile {
+                path: file_path.clone(),
+                status: FileStatus::Added,
+            });
+        }
+    }
 
     Ok(GitAnalysis {
         repo_path: canonical.to_string_lossy().to_string(),
         current_branch,
         default_branch,
         merge_base,
-        diff,
-        changed_files,
+        diff: full_diff,
+        changed_files: all_changed_files,
         commit_count,
+        has_uncommitted_changes: has_uncommitted,
     })
 }
 
@@ -551,5 +613,54 @@ mod tests {
         assert_eq!(sections.len(), 2);
         assert!(!sections[0].content.is_empty());
         assert!(!sections[1].content.is_empty());
+    }
+
+    fn make_temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("sherpa-test-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_generate_untracked_diff_basic() {
+        let dir = make_temp_dir("basic");
+        std::fs::write(dir.join("new.rs"), "fn main() {}\n").unwrap();
+        let diff = generate_untracked_diff(&dir, "new.rs").unwrap();
+        assert!(diff.starts_with("diff --git a/new.rs b/new.rs"));
+        assert!(diff.contains("new file mode 100644"));
+        assert!(diff.contains("--- /dev/null"));
+        assert!(diff.contains("+++ b/new.rs"));
+        assert!(diff.contains("@@ -0,0 +1,1 @@"));
+        assert!(diff.contains("+fn main() {}"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_generate_untracked_diff_multiline() {
+        let dir = make_temp_dir("multiline");
+        std::fs::write(dir.join("multi.rs"), "line1\nline2\nline3\n").unwrap();
+        let diff = generate_untracked_diff(&dir, "multi.rs").unwrap();
+        assert!(diff.contains("@@ -0,0 +1,3 @@"));
+        assert!(diff.contains("+line1\n+line2\n+line3\n"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_generate_untracked_diff_empty_file() {
+        let dir = make_temp_dir("empty");
+        std::fs::write(dir.join("empty.rs"), "").unwrap();
+        let diff = generate_untracked_diff(&dir, "empty.rs").unwrap();
+        assert!(diff.contains("new file mode 100644"));
+        assert!(!diff.contains("@@"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_generate_untracked_diff_binary_returns_none() {
+        let dir = make_temp_dir("binary");
+        std::fs::write(dir.join("binary.bin"), &[0u8, 159, 146, 150]).unwrap();
+        assert!(generate_untracked_diff(&dir, "binary.bin").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
